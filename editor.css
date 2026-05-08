@@ -5,7 +5,8 @@
  */
 
 [data-type="core/html"] .CodeMirror,
-.wp-block-html .CodeMirror {
+.wp-block-html .CodeMirror,
+.chsh-html-edit .CodeMirror {
     height: auto;
     min-height: 220px;
     font-size: 13px;
@@ -16,13 +17,15 @@
 }
 
 [data-type="core/html"] .CodeMirror-scroll,
-.wp-block-html .CodeMirror-scroll {
+.wp-block-html .CodeMirror-scroll,
+.chsh-html-edit .CodeMirror-scroll {
     min-height: 220px;
 }
 
 /* Focus ring to match other WP block editor inputs */
 [data-type="core/html"] .CodeMirror-focused,
-.wp-block-html .CodeMirror-focused {
+.wp-block-html .CodeMirror-focused,
+.chsh-html-edit .CodeMirror-focused {
     outline: none;
     border-color: #007cba;
     box-shadow: 0 0 0 1px #007cba;
@@ -30,7 +33,8 @@
 
 /* Gutter (line numbers) background */
 [data-type="core/html"] .CodeMirror-gutters,
-.wp-block-html .CodeMirror-gutters {
+.wp-block-html .CodeMirror-gutters,
+.chsh-html-edit .CodeMirror-gutters {
     border-right: 1px solid #ddd;
     background: #f7f7f7;
 }
