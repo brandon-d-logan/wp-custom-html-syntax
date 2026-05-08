@@ -67,10 +67,12 @@
     // Per-user dark-mode preference, persisted in localStorage so it
     // applies to every Custom HTML block this user edits in this browser.
     // The value is mirrored across tabs via the `storage` event (below).
-    const STORAGE_KEY = 'chsh:darkMode';
-    const DARK_THEME  = 'chsh-dark';
-    const LIGHT_THEME = 'default';
-    const DARK_EVENT  = 'chsh:darkmode-changed';
+    const STORAGE_KEY  = 'chsh:darkMode';
+    const DARK_THEME   = 'chsh-dark';
+    const LIGHT_THEME  = 'default';
+    const DARK_EVENT   = 'chsh:darkmode-changed';
+    const EXPAND_EVENT = 'chsh:expand-changed';
+    const EXPANDED_CLASS = 'chsh-expanded';
 
     function getDarkMode() {
         try {
@@ -120,6 +122,69 @@
             detail: { enabled: enabled },
         } ) );
     } );
+
+    // Pop-out / expanded mode. Toggling adds `chsh-expanded` to the
+    // CodeMirror wrapper(s) inside a given block, which CSS turns into a
+    // viewport-filling overlay so a long document is easier to read and
+    // edit. Tracked by clientId so multiple blocks in the same post can
+    // each be expanded/collapsed independently. Only one is typically open
+    // at a time, but nothing here forces that.
+    const expandedBlocks = new Set();
+
+    function findCmWrappersForBlock( clientId ) {
+        if ( ! clientId ) return [];
+        const sel = '[data-block="' + clientId + '"] .CodeMirror';
+        const found = [];
+        function collect( doc ) {
+            if ( ! doc || ! doc.querySelectorAll ) return;
+            doc.querySelectorAll( sel ).forEach( function ( el ) {
+                found.push( el );
+            } );
+        }
+        collect( document );
+        const iframes = document.querySelectorAll( 'iframe' );
+        for ( let i = 0; i < iframes.length; i++ ) {
+            try { collect( iframes[ i ].contentDocument ); } catch ( e ) {}
+        }
+        return found;
+    }
+
+    function setExpanded( clientId, expanded ) {
+        if ( expanded ) {
+            expandedBlocks.add( clientId );
+        } else {
+            expandedBlocks.delete( clientId );
+        }
+        const wrappers = findCmWrappersForBlock( clientId );
+        wrappers.forEach( function ( wrapper ) {
+            wrapper.classList.toggle( EXPANDED_CLASS, !! expanded );
+            // CodeMirror caches its viewport size; nudge it after the
+            // wrapper resizes so the gutters/scroller redraw correctly.
+            const cm = wrapper.CodeMirror;
+            if ( cm ) {
+                requestAnimationFrame( function () {
+                    try {
+                        cm.refresh();
+                        if ( expanded ) cm.focus();
+                    } catch ( e ) {}
+                } );
+            }
+        } );
+        window.dispatchEvent( new CustomEvent( EXPAND_EVENT, {
+            detail: { clientId: clientId, expanded: !! expanded },
+        } ) );
+    }
+
+    // ESC closes whatever is expanded. Listening on the top document is
+    // enough for most setups; for the iframe canvas we also attach to each
+    // iframe document we discover via watchDoc().
+    function escHandler( e ) {
+        if ( e.key !== 'Escape' || expandedBlocks.size === 0 ) return;
+        const ids = Array.from( expandedBlocks );
+        ids.forEach( function ( id ) { setExpanded( id, false ); } );
+        e.stopPropagation();
+    }
+    document.addEventListener( 'keydown', escHandler, true );
 
     function modeFor( textarea ) {
         const label = ( textarea.getAttribute( 'aria-label' ) || '' )
@@ -263,6 +328,9 @@
         watchedDocs.add( doc );
         log( 'watching document', doc === document ? '(top)' : '(iframe)' );
         scan( doc );
+        if ( doc !== document ) {
+            doc.addEventListener( 'keydown', escHandler, true );
+        }
 
         const Observer =
             ( doc.defaultView && doc.defaultView.MutationObserver ) ||
@@ -344,6 +412,39 @@
             } )
         );
 
+        // Four corner brackets pointing outward — the conventional
+        // "expand / fullscreen" affordance.
+        const expandIcon = el(
+            'svg',
+            {
+                xmlns:         'http://www.w3.org/2000/svg',
+                viewBox:       '0 0 24 24',
+                width:         24,
+                height:        24,
+                'aria-hidden': true,
+                focusable:     false,
+            },
+            el( 'path', {
+                fill: 'currentColor',
+                d:    'M5 5h5v2H7v3H5V5zm9 0h5v5h-2V7h-3V5zM5 14h2v3h3v2H5v-5zm12 0h2v5h-5v-2h3v-3z',
+            } )
+        );
+        const collapseIcon = el(
+            'svg',
+            {
+                xmlns:         'http://www.w3.org/2000/svg',
+                viewBox:       '0 0 24 24',
+                width:         24,
+                height:        24,
+                'aria-hidden': true,
+                focusable:     false,
+            },
+            el( 'path', {
+                fill: 'currentColor',
+                d:    'M10 5h2v5H7V8h3V5zm7 3V5h-2v5h5V8h-3zM5 14h5v5H8v-3H5v-2zm12 2h3v-2h-5v5h2v-3z',
+            } )
+        );
+
         const withDarkModeToolbar = createHigherOrderComponent(
             function ( BlockEdit ) {
                 return function ( props ) {
@@ -355,6 +456,12 @@
                     const dark      = darkState[ 0 ];
                     const setDark   = darkState[ 1 ];
 
+                    const expandedState = useState(
+                        expandedBlocks.has( props.clientId )
+                    );
+                    const expanded      = expandedState[ 0 ];
+                    const setExpandedSt = expandedState[ 1 ];
+
                     useEffect( function () {
                         function handler( event ) {
                             setDark( !! ( event.detail && event.detail.enabled ) );
@@ -365,16 +472,49 @@
                         };
                     }, [] );
 
+                    useEffect( function () {
+                        function handler( event ) {
+                            const d = event.detail || {};
+                            if ( d.clientId !== props.clientId ) return;
+                            setExpandedSt( !! d.expanded );
+                        }
+                        window.addEventListener( EXPAND_EVENT, handler );
+                        return function () {
+                            window.removeEventListener( EXPAND_EVENT, handler );
+                        };
+                    }, [ props.clientId ] );
+
+                    // Collapse on unmount so a stale expanded flag can't
+                    // outlive the block (e.g. if the user deletes it
+                    // while the overlay is open).
+                    useEffect( function () {
+                        return function () {
+                            if ( expandedBlocks.has( props.clientId ) ) {
+                                setExpanded( props.clientId, false );
+                            }
+                        };
+                    }, [ props.clientId ] );
+
                     return el(
                         Fragment,
                         null,
                         el( BlockEdit, Object.assign( { key: 'edit' }, props ) ),
                         el(
                             BlockControls,
-                            { key: 'chsh-dark-mode' },
+                            { key: 'chsh-toolbar' },
                             el(
                                 ToolbarGroup,
                                 null,
+                                el( ToolbarButton, {
+                                    icon:      expanded ? collapseIcon : expandIcon,
+                                    label:     expanded
+                                        ? __( 'Collapse editor', 'chsh' )
+                                        : __( 'Expand editor', 'chsh' ),
+                                    isPressed: expanded,
+                                    onClick:   function () {
+                                        setExpanded( props.clientId, ! expanded );
+                                    },
+                                } ),
                                 el( ToolbarButton, {
                                     icon:      moonIcon,
                                     label:     dark
