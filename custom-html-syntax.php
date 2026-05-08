@@ -3,13 +3,15 @@
  * Plugin Name:       Custom HTML Syntax Highlighter
  * Description:       Adds CodeMirror syntax highlighting to the Custom HTML
  *                    block — using WP's own bundled CodeMirror. No CDN needed.
- * Version:           1.0.0
+ * Version:           1.1.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * License:           License to Kill
  */
 
 defined( 'ABSPATH' ) || exit;
+
+define( 'CHSH_VERSION', '1.1.0' );
 
 add_action( 'enqueue_block_editor_assets', 'chsh_enqueue_editor_assets' );
 
@@ -27,8 +29,13 @@ function chsh_enqueue_editor_assets() {
     wp_enqueue_script(
         'chsh-editor',
         plugin_dir_url( __FILE__ ) . 'editor.js',
-        array( 'wp-dom-ready', 'wp-codemirror' ),
-        '1.0.0',
+        array(
+            'wp-codemirror',
+            'wp-hooks',
+            'wp-compose',
+            'wp-element',
+        ),
+        CHSH_VERSION,
         true
     );
 
@@ -36,7 +43,7 @@ function chsh_enqueue_editor_assets() {
         'chsh-editor',
         plugin_dir_url( __FILE__ ) . 'editor.css',
         array( 'code-editor' ),
-        '1.0.0'
+        CHSH_VERSION
     );
 
     // Config values exposed to JS as window.chshSettings

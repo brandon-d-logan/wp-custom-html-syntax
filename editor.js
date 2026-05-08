@@ -1,16 +1,33 @@
 /* global CodeMirror, chshSettings, wp */
+/**
+ * Adds CodeMirror syntax highlighting to the core/html (Custom HTML) block.
+ *
+ * Uses the documented Gutenberg extensibility API:
+ *   - `editor.BlockEdit` filter to wrap the block's edit component with an HOC
+ *   - `wp.element` (React) refs + effects to find the rendered <textarea>
+ *
+ * This works whether Gutenberg renders the canvas in the main document or in
+ * an iframe, because React resolves refs to the actual mounted DOM node in
+ * whichever document the component ends up in. No DOM polling required.
+ *
+ * See:
+ *   https://developer.wordpress.org/block-editor/reference-guides/filters/block-filters/#editor-blockedit
+ */
 ( function () {
     'use strict';
 
     if ( typeof CodeMirror === 'undefined' ) {
-        return; // Safety guard — should never happen on WP 6+
+        return;
     }
 
-    // Track which textareas we've already enhanced
+    const { addFilter }                  = wp.hooks;
+    const { createHigherOrderComponent } = wp.compose;
+    const { createElement, useEffect, useRef } = wp.element;
+
     const initialized = new WeakSet();
 
     function attachEditor( textarea ) {
-        if ( initialized.has( textarea ) ) return;
+        if ( ! textarea || initialized.has( textarea ) ) return;
         initialized.add( textarea );
 
         const cm = CodeMirror.fromTextArea( textarea, {
@@ -24,7 +41,6 @@
             matchBrackets:     true,
             autoCloseBrackets: true,
             extraKeys: {
-                // Tab inserts spaces instead of a tab character
                 Tab: function ( editor ) {
                     if ( editor.somethingSelected() ) {
                         editor.indentSelection( 'add' );
@@ -35,19 +51,16 @@
                         );
                     }
                 },
-                // Shift-Tab dedents
                 'Shift-Tab': function ( editor ) {
                     editor.indentSelection( 'subtract' );
                 },
             },
         } );
 
-        // ── Sync CodeMirror → React ──────────────────────────────────────────
-        // React uses synthetic events. To trigger its onChange we must use the
-        // native HTMLTextAreaElement value setter, then dispatch an 'input'
-        // event so React's SyntheticEvent layer picks it up.
+        // Push CodeMirror edits back into the React-controlled <textarea> so
+        // Gutenberg's onChange fires and the block's saved markup updates.
         const nativeSetter = Object.getOwnPropertyDescriptor(
-            HTMLTextAreaElement.prototype,
+            textarea.ownerDocument.defaultView.HTMLTextAreaElement.prototype,
             'value'
         ).set;
 
@@ -56,34 +69,59 @@
             textarea.dispatchEvent( new Event( 'input', { bubbles: true } ) );
         } );
 
-        // Refresh after the Preview ↔ HTML tab toggle reveals the editor again
         cm.on( 'focus', function () {
             cm.refresh();
         } );
 
-        // Refresh on window resize so line numbers stay aligned
-        window.addEventListener( 'resize', function () {
-            cm.refresh();
-        }, { passive: true } );
+        return cm;
     }
 
-    function scanBlocks() {
-        // The Custom HTML block wraps its textarea inside an element with
-        // data-type="core/html". .wp-block-html is a fallback for older builds.
-        document
-            .querySelectorAll(
-                '[data-type="core/html"] textarea, .wp-block-html textarea'
-            )
-            .forEach( attachEditor );
-    }
+    const withCodeMirror = createHigherOrderComponent( function ( BlockEdit ) {
+        return function ( props ) {
+            if ( props.name !== 'core/html' ) {
+                return createElement( BlockEdit, props );
+            }
 
-    wp.domReady( function () {
-        scanBlocks();
+            const wrapperRef = useRef( null );
 
-        // Watch the editor canvas for newly inserted blocks and tab switches
-        new MutationObserver( scanBlocks ).observe( document.body, {
-            childList: true,
-            subtree:   true,
-        } );
-    } );
+            useEffect( function () {
+                if ( ! wrapperRef.current ) return;
+
+                // The Custom HTML block toggles between "HTML" (textarea) and
+                // "Preview" (rendered output). The textarea only exists in HTML
+                // mode, and is unmounted/remounted when the user switches —
+                // so we observe the wrapper for it appearing.
+                const tryAttach = function () {
+                    const ta = wrapperRef.current &&
+                        wrapperRef.current.querySelector( 'textarea' );
+                    if ( ta ) attachEditor( ta );
+                };
+
+                tryAttach();
+
+                const observer = new ( wrapperRef.current.ownerDocument
+                    .defaultView.MutationObserver )( tryAttach );
+                observer.observe( wrapperRef.current, {
+                    childList: true,
+                    subtree:   true,
+                } );
+
+                return function () {
+                    observer.disconnect();
+                };
+            }, [ props.clientId, props.attributes && props.attributes.content ] );
+
+            return createElement(
+                'div',
+                { ref: wrapperRef, className: 'chsh-html-wrapper' },
+                createElement( BlockEdit, props )
+            );
+        };
+    }, 'withCodeMirrorHTML' );
+
+    addFilter(
+        'editor.BlockEdit',
+        'chsh/with-codemirror-html',
+        withCodeMirror
+    );
 } )();
