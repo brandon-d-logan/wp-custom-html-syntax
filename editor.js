@@ -36,10 +36,20 @@
         return;
     }
 
-    // The modal's <PlainText> renders TextareaAutosize with className
-    //   clsx('block-editor-plain-text', 'block-library-html__modal-editor').
-    // Match either, to be tolerant of older Gutenberg releases.
+    // The Custom HTML block currently in WP renders an inline <PlainText>
+    // (textarea.block-editor-plain-text) directly in the block when not in
+    // Preview mode. Source (matches what 6.9 ships):
+    //   https://github.com/WordPress/gutenberg/blob/51437a9/packages/block-library/src/html/edit.js
+    //
+    // The trunk-only modal version (Gutenberg #73108, Nov 2025) instead
+    // renders textareas with class `block-library-html__modal-editor`
+    // inside a portal-mounted Modal. We match both so the plugin works
+    // before and after that change lands in core.
     const SELECTOR = [
+        // Inline textarea inside the block wrapper.
+        '[data-type="core/html"] textarea',
+        '.wp-block-html textarea',
+        // Modal-based editors (forward-compat).
         'textarea.block-library-html__modal-editor',
         '.block-library-html__modal-tab textarea',
         '.block-library-html__modal textarea',

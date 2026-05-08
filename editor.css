@@ -1,13 +1,19 @@
 /*
- * Style CodeMirror inside the Custom HTML block's edit modal.
- * The modal's PlainText editors carry .block-library-html__modal-editor;
- * CodeMirror.fromTextArea inserts its UI as a sibling and hides the
- * original textarea, so we target the CM wrapper inside the modal tab.
+ * Style CodeMirror inside the Custom HTML block.
+ *
+ * In the inline-textarea version of the block (current WP), CodeMirror's
+ * wrapper is inserted as a sibling of textarea.block-editor-plain-text
+ * inside the block wrapper ([data-type="core/html"] / .wp-block-html).
+ *
+ * In the modal version (Gutenberg trunk), the wrapper sits inside a
+ * .block-library-html__modal-tab. Both are styled here.
  */
 
+[data-type="core/html"] .CodeMirror,
+.wp-block-html .CodeMirror,
 .block-library-html__modal-tab .CodeMirror {
-    height: 100%;
-    min-height: 320px;
+    height: auto;
+    min-height: 220px;
     font-size: 13px;
     font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
     line-height: 1.65;
@@ -15,16 +21,22 @@
     border-radius: 2px;
 }
 
+[data-type="core/html"] .CodeMirror-scroll,
+.wp-block-html .CodeMirror-scroll,
 .block-library-html__modal-tab .CodeMirror-scroll {
-    min-height: 320px;
+    min-height: 220px;
 }
 
+[data-type="core/html"] .CodeMirror-focused,
+.wp-block-html .CodeMirror-focused,
 .block-library-html__modal-tab .CodeMirror-focused {
     outline: none;
     border-color: #007cba;
     box-shadow: 0 0 0 1px #007cba;
 }
 
+[data-type="core/html"] .CodeMirror-gutters,
+.wp-block-html .CodeMirror-gutters,
 .block-library-html__modal-tab .CodeMirror-gutters {
     border-right: 1px solid #ddd;
     background: #f7f7f7;
