@@ -27,7 +27,12 @@ function chsh_enqueue_editor_assets() {
     wp_enqueue_script(
         'chsh-editor',
         plugin_dir_url( __FILE__ ) . 'editor.js',
-        array( 'wp-dom-ready', 'wp-codemirror' ),
+        array(
+            'wp-codemirror',
+            'wp-hooks',
+            'wp-compose',
+            'wp-element',
+        ),
         '1.0.0',
         true
     );
