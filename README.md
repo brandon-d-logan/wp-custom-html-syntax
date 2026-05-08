@@ -2,7 +2,7 @@
 
 A WordPress plugin that adds full **CodeMirror syntax highlighting** to the built-in Custom HTML block — using WordPress's own bundled CodeMirror. No CDN, no extra downloads, no external dependencies.
 
-![Comparison of the plain Core Output editor vs the plugin's syntax-highlighted editor with optional dark mode toggle](assets/screenshot.png)
+![Comparison of the plain Core Output editor vs the plugin's syntax-highlighted editor with optional dark mode toggle](assets/plugin-output-screenshot.jpg)
 
 ---
 
