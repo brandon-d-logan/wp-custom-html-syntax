@@ -37,3 +37,59 @@
     border-right: 1px solid #ddd;
     background: #f7f7f7;
 }
+
+/*
+ * Dark theme — registered as `chsh-dark`, applied by CodeMirror via
+ * cm.setOption('theme', 'chsh-dark') which puts `cm-s-chsh-dark` on the
+ * wrapper element. Selectors are scoped to the Custom HTML block so this
+ * theme only affects editors this plugin manages.
+ *
+ * CodeMirror theme docs: https://codemirror.net/5/doc/manual.html#option_theme
+ *
+ * Palette is loosely based on VS Code's Dark+ so the htmlmixed / css /
+ * javascript modes all read well without per-mode tweaks.
+ */
+[data-type="core/html"] .CodeMirror.cm-s-chsh-dark,
+.wp-block-html .CodeMirror.cm-s-chsh-dark,
+.block-library-html__modal-tab .CodeMirror.cm-s-chsh-dark {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border-color: #3c3c3c;
+}
+
+[data-type="core/html"] .cm-s-chsh-dark .CodeMirror-gutters,
+.wp-block-html .cm-s-chsh-dark .CodeMirror-gutters,
+.block-library-html__modal-tab .cm-s-chsh-dark .CodeMirror-gutters {
+    background: #252526;
+    border-right-color: #333;
+}
+
+.cm-s-chsh-dark .CodeMirror-linenumber  { color: #858585; }
+.cm-s-chsh-dark .CodeMirror-cursor      { border-left-color: #d4d4d4; }
+.cm-s-chsh-dark .CodeMirror-selected    { background: #264f78; }
+.cm-s-chsh-dark.CodeMirror-focused .CodeMirror-selected,
+.cm-s-chsh-dark .CodeMirror-focused .CodeMirror-selected { background: #264f78; }
+.cm-s-chsh-dark .CodeMirror-activeline-background { background: #2a2a2a; }
+.cm-s-chsh-dark .CodeMirror-matchingbracket { color: #d4d4d4; background: #3a3d41; }
+
+.cm-s-chsh-dark .cm-comment   { color: #6a9955; }
+.cm-s-chsh-dark .cm-keyword,
+.cm-s-chsh-dark .cm-builtin   { color: #c586c0; }
+.cm-s-chsh-dark .cm-string,
+.cm-s-chsh-dark .cm-string-2  { color: #ce9178; }
+.cm-s-chsh-dark .cm-number    { color: #b5cea8; }
+.cm-s-chsh-dark .cm-tag       { color: #569cd6; }
+.cm-s-chsh-dark .cm-bracket,
+.cm-s-chsh-dark .cm-punctuation { color: #d4d4d4; }
+.cm-s-chsh-dark .cm-attribute { color: #9cdcfe; }
+.cm-s-chsh-dark .cm-property  { color: #9cdcfe; }
+.cm-s-chsh-dark .cm-variable,
+.cm-s-chsh-dark .cm-variable-2,
+.cm-s-chsh-dark .cm-variable-3 { color: #9cdcfe; }
+.cm-s-chsh-dark .cm-def       { color: #dcdcaa; }
+.cm-s-chsh-dark .cm-operator  { color: #d4d4d4; }
+.cm-s-chsh-dark .cm-meta      { color: #d4d4d4; }
+.cm-s-chsh-dark .cm-qualifier { color: #d7ba7d; }
+.cm-s-chsh-dark .cm-atom      { color: #569cd6; }
+.cm-s-chsh-dark .cm-link      { color: #9cdcfe; }
+.cm-s-chsh-dark .cm-error     { color: #f48771; }

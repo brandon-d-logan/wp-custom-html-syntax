@@ -64,9 +64,62 @@
         return ( window.chshSettings && chshSettings.tabSize ) || 2;
     }
 
-    function settingsTheme() {
-        return ( window.chshSettings && chshSettings.theme ) || 'default';
+    // Per-user dark-mode preference, persisted in localStorage so it
+    // applies to every Custom HTML block this user edits in this browser.
+    // The value is mirrored across tabs via the `storage` event (below).
+    const STORAGE_KEY = 'chsh:darkMode';
+    const DARK_THEME  = 'chsh-dark';
+    const LIGHT_THEME = 'default';
+    const DARK_EVENT  = 'chsh:darkmode-changed';
+
+    function getDarkMode() {
+        try {
+            return window.localStorage.getItem( STORAGE_KEY ) === '1';
+        } catch ( e ) {
+            return false;
+        }
     }
+
+    function currentTheme() {
+        return getDarkMode() ? DARK_THEME : LIGHT_THEME;
+    }
+
+    // Live registry of attached CodeMirror instances so we can repaint
+    // them when the user toggles. Filtered on each iteration to drop
+    // editors whose wrapper has been detached from the DOM.
+    const cmInstances = [];
+
+    function applyThemeToAll( theme ) {
+        for ( let i = cmInstances.length - 1; i >= 0; i-- ) {
+            const cm = cmInstances[ i ];
+            let wrapper;
+            try { wrapper = cm.getWrapperElement(); } catch ( e ) {}
+            if ( ! wrapper || ! wrapper.isConnected ) {
+                cmInstances.splice( i, 1 );
+                continue;
+            }
+            try { cm.setOption( 'theme', theme ); } catch ( e ) {}
+        }
+    }
+
+    function setDarkMode( enabled ) {
+        try {
+            window.localStorage.setItem( STORAGE_KEY, enabled ? '1' : '0' );
+        } catch ( e ) {}
+        applyThemeToAll( enabled ? DARK_THEME : LIGHT_THEME );
+        window.dispatchEvent( new CustomEvent( DARK_EVENT, {
+            detail: { enabled: !! enabled },
+        } ) );
+    }
+
+    window.addEventListener( 'storage', function ( e ) {
+        if ( e.key !== STORAGE_KEY ) return;
+        const enabled = e.newValue === '1';
+        applyThemeToAll( enabled ? DARK_THEME : LIGHT_THEME );
+        window.dispatchEvent( new CustomEvent( DARK_EVENT, {
+            detail: { enabled: enabled },
+        } ) );
+    } );
 
     function modeFor( textarea ) {
         const label = ( textarea.getAttribute( 'aria-label' ) || '' )
@@ -85,7 +138,7 @@
 
         const cm = settings.codemirror;
         cm.mode              = modeFor( textarea );
-        cm.theme             = settingsTheme();
+        cm.theme             = currentTheme();
         cm.lineNumbers       = true;
         cm.lineWrapping      = true;
         cm.indentUnit        = settingsTabSize();
@@ -128,6 +181,8 @@
             console.error( '[chsh] no codemirror instance returned' );
             return;
         }
+
+        cmInstances.push( cm );
 
         // Push CodeMirror edits back into the React-controlled <textarea>
         // so PlainText's onChange fires and block attributes update.
@@ -210,6 +265,114 @@
                 try { watchDoc( iframes[ i ].contentDocument ); } catch ( e ) {}
             } );
         }
+    }
+
+    // Inject a "Dark mode" toggle into the core/html block toolbar via
+    // the documented `editor.BlockEdit` filter. The HOC wraps every
+    // BlockEdit, but only renders extra controls for core/html so other
+    // blocks stay untouched.
+    //   editor.BlockEdit:
+    //     https://developer.wordpress.org/block-editor/reference-guides/filters/block-filters/#editor-blockedit
+    //   BlockControls:
+    //     https://developer.wordpress.org/block-editor/reference-guides/components/block-controls/
+    //   CodeMirror theme option:
+    //     https://codemirror.net/5/doc/manual.html#option_theme
+    if (
+        wp.element &&
+        wp.compose &&
+        wp.blockEditor &&
+        wp.components &&
+        wp.hooks
+    ) {
+        const el                       = wp.element.createElement;
+        const Fragment                 = wp.element.Fragment;
+        const useState                 = wp.element.useState;
+        const useEffect                = wp.element.useEffect;
+        const createHigherOrderComponent =
+            wp.compose.createHigherOrderComponent;
+        const BlockControls            = wp.blockEditor.BlockControls;
+        const ToolbarGroup             = wp.components.ToolbarGroup;
+        const ToolbarButton            = wp.components.ToolbarButton;
+        const addFilter                = wp.hooks.addFilter;
+        const __                       =
+            ( wp.i18n && wp.i18n.__ ) || function ( s ) { return s; };
+
+        const moonIcon = el(
+            'svg',
+            {
+                xmlns:         'http://www.w3.org/2000/svg',
+                viewBox:       '0 0 24 24',
+                width:         24,
+                height:        24,
+                'aria-hidden': true,
+                focusable:     false,
+            },
+            el( 'path', {
+                fill: 'currentColor',
+                d:    'M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z',
+            } )
+        );
+
+        const withDarkModeToolbar = createHigherOrderComponent(
+            function ( BlockEdit ) {
+                return function ( props ) {
+                    if ( props.name !== 'core/html' ) {
+                        return el( BlockEdit, props );
+                    }
+
+                    const darkState = useState( getDarkMode() );
+                    const dark      = darkState[ 0 ];
+                    const setDark   = darkState[ 1 ];
+
+                    useEffect( function () {
+                        function handler( event ) {
+                            setDark( !! ( event.detail && event.detail.enabled ) );
+                        }
+                        window.addEventListener( DARK_EVENT, handler );
+                        return function () {
+                            window.removeEventListener( DARK_EVENT, handler );
+                        };
+                    }, [] );
+
+                    return el(
+                        Fragment,
+                        null,
+                        el( BlockEdit, Object.assign( { key: 'edit' }, props ) ),
+                        el(
+                            BlockControls,
+                            { key: 'chsh-dark-mode' },
+                            el(
+                                ToolbarGroup,
+                                null,
+                                el( ToolbarButton, {
+                                    icon:      moonIcon,
+                                    label:     dark
+                                        ? __( 'Switch to light mode', 'chsh' )
+                                        : __( 'Switch to dark mode', 'chsh' ),
+                                    isPressed: dark,
+                                    onClick:   function () {
+                                        setDarkMode( ! dark );
+                                    },
+                                } )
+                            )
+                        )
+                    );
+                };
+            },
+            'withChshDarkModeToolbar'
+        );
+
+        addFilter(
+            'editor.BlockEdit',
+            'chsh/dark-mode-toolbar',
+            withDarkModeToolbar
+        );
+    } else {
+        // eslint-disable-next-line no-console
+        console.warn(
+            '[chsh] block editor packages unavailable; ' +
+            'dark-mode toolbar will not be registered.'
+        );
     }
 
     wp.domReady( function () {
