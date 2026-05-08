@@ -1,55 +1,61 @@
 /* global CodeMirror, chshSettings, wp */
 /**
- * Replaces the core/html (Custom HTML) block's edit component with a
- * CodeMirror-backed editor.
+ * Adds CodeMirror syntax highlighting to the Custom HTML block (core/html).
  *
- * Approach:
- *   - Use the documented `editor.BlockEdit` filter to *replace* the edit
- *     component for `core/html` only. Other blocks pass through untouched.
- *   - Render our own React component that owns a <div> mount point,
- *     instantiates CodeMirror inside it, and bridges value <-> attributes
- *     via the standard setAttributes(props) API.
+ * Block API v3 (current trunk) doesn't render a textarea inside the block
+ * itself — the block edit only shows a Placeholder or a Preview, with an
+ * "Edit code" button that opens HTMLEditModal. The modal renders three
+ * <PlainText> editors (HTML / CSS / JS) with class
+ * `block-library-html__modal-editor`.
  *
- * Why replacement (not augmentation):
- *   The default core/html edit uses <PlainText> (TextareaAutosize) which
- *   manages its own refs/DOM. Running CodeMirror.fromTextArea on that
- *   textarea fights React's reconciler and trips the block's error
- *   boundary ("This block has encountered an error..."). Replacing the
- *   edit component avoids any DOM ownership conflict.
+ * So: we leave the block edit alone (replacing it broke the
+ * Placeholder/Preview/Modal flow and tripped the block error boundary)
+ * and enhance the modal's textareas when they appear in the DOM.
  *
- * See:
- *   https://developer.wordpress.org/block-editor/reference-guides/filters/block-filters/#editor-blockedit
+ * Block source for reference:
+ *   https://github.com/WordPress/gutenberg/tree/trunk/packages/block-library/src/html
  */
 ( function () {
     'use strict';
 
     if ( typeof CodeMirror === 'undefined' ) {
+        // eslint-disable-next-line no-console
+        console.warn( '[chsh] CodeMirror not loaded; skipping.' );
         return;
     }
 
-    const { addFilter }                        = wp.hooks;
-    const { createHigherOrderComponent }       = wp.compose;
-    const { createElement, useEffect, useRef } = wp.element;
+    const SELECTOR = 'textarea.block-library-html__modal-editor';
+    const initialized = new WeakSet();
 
-    function HtmlEdit( props ) {
-        const { attributes, setAttributes } = props;
-        const content   = ( attributes && attributes.content ) || '';
-        const mountRef  = useRef( null );
-        const cmRef     = useRef( null );
-        const contentRef = useRef( content );
+    function settingsTabSize() {
+        return ( window.chshSettings && chshSettings.tabSize ) || 2;
+    }
 
-        // Mount CodeMirror once.
-        useEffect( function () {
-            if ( ! mountRef.current || cmRef.current ) return;
+    function settingsTheme() {
+        return ( window.chshSettings && chshSettings.theme ) || 'default';
+    }
 
-            const cm = CodeMirror( mountRef.current, {
-                value:             content,
-                mode:              'htmlmixed',
-                theme:             chshSettings.theme || 'default',
+    function modeFor( textarea ) {
+        const label = ( textarea.getAttribute( 'aria-label' ) || '' )
+            .toLowerCase();
+        if ( label === 'css' ) return 'css';
+        if ( label === 'javascript' ) return 'javascript';
+        return 'htmlmixed';
+    }
+
+    function attachEditor( textarea ) {
+        if ( ! textarea || initialized.has( textarea ) ) return;
+        initialized.add( textarea );
+
+        let cm;
+        try {
+            cm = CodeMirror.fromTextArea( textarea, {
+                mode:              modeFor( textarea ),
+                theme:             settingsTheme(),
                 lineNumbers:       true,
                 lineWrapping:      true,
-                indentUnit:        chshSettings.tabSize || 2,
-                tabSize:           chshSettings.tabSize || 2,
+                indentUnit:        settingsTabSize(),
+                tabSize:           settingsTabSize(),
                 indentWithTabs:    false,
                 matchBrackets:     true,
                 autoCloseBrackets: true,
@@ -59,7 +65,7 @@
                             editor.indentSelection( 'add' );
                         } else {
                             editor.replaceSelection(
-                                ' '.repeat( chshSettings.tabSize || 2 ),
+                                ' '.repeat( settingsTabSize() ),
                                 'end'
                             );
                         }
@@ -69,63 +75,57 @@
                     },
                 },
             } );
+        } catch ( err ) {
+            // eslint-disable-next-line no-console
+            console.error( '[chsh] CodeMirror init failed:', err );
+            return;
+        }
 
-            cm.on( 'change', function () {
-                const value = cm.getValue();
-                contentRef.current = value;
-                setAttributes( { content: value } );
-            } );
+        // Push CodeMirror edits back into the React-controlled <textarea>
+        // so PlainText's onChange fires and the modal's local state updates.
+        const win = textarea.ownerDocument.defaultView || window;
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+            win.HTMLTextAreaElement.prototype,
+            'value'
+        ).set;
 
-            // CodeMirror miscalculates layout if mounted while hidden;
-            // refresh once the next paint settles.
-            requestAnimationFrame( function () {
-                cm.refresh();
-            } );
+        cm.on( 'change', function () {
+            nativeSetter.call( textarea, cm.getValue() );
+            textarea.dispatchEvent( new Event( 'input', { bubbles: true } ) );
+        } );
 
-            cmRef.current = cm;
-
-            return function () {
-                if ( cmRef.current ) {
-                    const wrapper = cmRef.current.getWrapperElement();
-                    if ( wrapper && wrapper.parentNode ) {
-                        wrapper.parentNode.removeChild( wrapper );
-                    }
-                    cmRef.current = null;
-                }
-            };
-            // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [] );
-
-        // Push external content changes (undo/redo, programmatic edits)
-        // into CodeMirror — but skip echoes from our own onChange.
-        useEffect( function () {
-            const cm = cmRef.current;
-            if ( ! cm ) return;
-            if ( contentRef.current === content ) return;
-            contentRef.current = content;
-            const cursor = cm.getCursor();
-            cm.setValue( content );
-            try { cm.setCursor( cursor ); } catch ( e ) { /* out of range */ }
-        }, [ content ] );
-
-        return createElement( 'div', {
-            ref:       mountRef,
-            className: 'chsh-html-edit',
+        // Tab switches and modal mounting can leave CM with a stale layout.
+        cm.on( 'focus', function () {
+            cm.refresh();
+        } );
+        requestAnimationFrame( function () {
+            cm.refresh();
         } );
     }
 
-    const replaceHtmlEdit = createHigherOrderComponent( function ( BlockEdit ) {
-        return function ( props ) {
-            if ( props.name === 'core/html' ) {
-                return createElement( HtmlEdit, props );
-            }
-            return createElement( BlockEdit, props );
-        };
-    }, 'withCodeMirrorHTML' );
+    function scan( root ) {
+        if ( ! root || ! root.querySelectorAll ) return;
+        root.querySelectorAll( SELECTOR ).forEach( attachEditor );
+    }
 
-    addFilter(
-        'editor.BlockEdit',
-        'chsh/with-codemirror-html',
-        replaceHtmlEdit
-    );
+    wp.domReady( function () {
+        scan( document );
+
+        // The modal mounts on demand (and tabs swap textareas in/out), so
+        // watch for the editor textareas appearing anywhere in the DOM.
+        new MutationObserver( function ( mutations ) {
+            for ( let i = 0; i < mutations.length; i++ ) {
+                const added = mutations[ i ].addedNodes;
+                for ( let j = 0; j < added.length; j++ ) {
+                    const node = added[ j ];
+                    if ( node.nodeType !== 1 ) continue;
+                    if ( node.matches && node.matches( SELECTOR ) ) {
+                        attachEditor( node );
+                    } else {
+                        scan( node );
+                    }
+                }
+            }
+        } ).observe( document.body, { childList: true, subtree: true } );
+    } );
 } )();
