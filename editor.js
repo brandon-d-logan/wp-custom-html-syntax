@@ -4,11 +4,13 @@
  *
  * Uses the documented Gutenberg extensibility API:
  *   - `editor.BlockEdit` filter to wrap the block's edit component with an HOC
- *   - `wp.element` (React) refs + effects to find the rendered <textarea>
+ *   - `wp.element` (React) effects to locate the rendered textarea
  *
- * This works whether Gutenberg renders the canvas in the main document or in
- * an iframe, because React resolves refs to the actual mounted DOM node in
- * whichever document the component ends up in. No DOM polling required.
+ * The HOC renders the original BlockEdit *unchanged* — no wrapping element —
+ * then uses a useEffect to find this block's wrapper via its `data-block`
+ * attribute (set by Gutenberg on every block in the canvas) and attaches
+ * CodeMirror to the textarea inside it. Wrapping BlockEdit in extra DOM can
+ * trip up some core blocks' layout / error boundaries, so we avoid it.
  *
  * See:
  *   https://developer.wordpress.org/block-editor/reference-guides/filters/block-filters/#editor-blockedit
@@ -22,7 +24,7 @@
 
     const { addFilter }                  = wp.hooks;
     const { createHigherOrderComponent } = wp.compose;
-    const { createElement, useEffect, useRef } = wp.element;
+    const { createElement, useEffect }   = wp.element;
 
     const initialized = new WeakSet();
 
@@ -59,8 +61,9 @@
 
         // Push CodeMirror edits back into the React-controlled <textarea> so
         // Gutenberg's onChange fires and the block's saved markup updates.
+        const win = textarea.ownerDocument.defaultView || window;
         const nativeSetter = Object.getOwnPropertyDescriptor(
-            textarea.ownerDocument.defaultView.HTMLTextAreaElement.prototype,
+            win.HTMLTextAreaElement.prototype,
             'value'
         ).set;
 
@@ -72,50 +75,74 @@
         cm.on( 'focus', function () {
             cm.refresh();
         } );
+    }
 
-        return cm;
+    // Search the main document and any same-origin iframes (forward-compat
+    // for an iframe'd canvas) for a block wrapper with this clientId.
+    function findBlockWrapper( clientId ) {
+        const selector = '[data-block="' + clientId + '"]';
+        const main = document.querySelector( selector );
+        if ( main ) return main;
+
+        const iframes = document.querySelectorAll( 'iframe' );
+        for ( let i = 0; i < iframes.length; i++ ) {
+            let doc;
+            try { doc = iframes[ i ].contentDocument; } catch ( e ) { continue; }
+            if ( ! doc ) continue;
+            const found = doc.querySelector( selector );
+            if ( found ) return found;
+        }
+        return null;
     }
 
     const withCodeMirror = createHigherOrderComponent( function ( BlockEdit ) {
         return function ( props ) {
-            if ( props.name !== 'core/html' ) {
-                return createElement( BlockEdit, props );
-            }
-
-            const wrapperRef = useRef( null );
-
+            // Hooks must be called unconditionally; gate work inside the effect.
             useEffect( function () {
-                if ( ! wrapperRef.current ) return;
+                if ( props.name !== 'core/html' || ! props.clientId ) return;
 
-                // The Custom HTML block toggles between "HTML" (textarea) and
-                // "Preview" (rendered output). The textarea only exists in HTML
-                // mode, and is unmounted/remounted when the user switches —
-                // so we observe the wrapper for it appearing.
+                let observer = null;
+                let cancelled = false;
+
                 const tryAttach = function () {
-                    const ta = wrapperRef.current &&
-                        wrapperRef.current.querySelector( 'textarea' );
+                    const wrapper = findBlockWrapper( props.clientId );
+                    if ( ! wrapper ) return false;
+                    const ta = wrapper.querySelector( 'textarea' );
                     if ( ta ) attachEditor( ta );
+
+                    if ( ! observer ) {
+                        const Win = wrapper.ownerDocument.defaultView || window;
+                        observer = new Win.MutationObserver( function () {
+                            const t = wrapper.querySelector( 'textarea' );
+                            if ( t ) attachEditor( t );
+                        } );
+                        observer.observe( wrapper, {
+                            childList: true,
+                            subtree:   true,
+                        } );
+                    }
+                    return true;
                 };
 
-                tryAttach();
-
-                const observer = new ( wrapperRef.current.ownerDocument
-                    .defaultView.MutationObserver )( tryAttach );
-                observer.observe( wrapperRef.current, {
-                    childList: true,
-                    subtree:   true,
-                } );
+                if ( ! tryAttach() ) {
+                    // The block wrapper may not be in the DOM on the same tick
+                    // the effect fires; retry on the next animation frame.
+                    const raf = function () {
+                        if ( cancelled ) return;
+                        if ( ! tryAttach() ) {
+                            requestAnimationFrame( raf );
+                        }
+                    };
+                    requestAnimationFrame( raf );
+                }
 
                 return function () {
-                    observer.disconnect();
+                    cancelled = true;
+                    if ( observer ) observer.disconnect();
                 };
-            }, [ props.clientId, props.attributes && props.attributes.content ] );
+            }, [ props.clientId, props.name ] );
 
-            return createElement(
-                'div',
-                { ref: wrapperRef, className: 'chsh-html-wrapper' },
-                createElement( BlockEdit, props )
-            );
+            return createElement( BlockEdit, props );
         };
     }, 'withCodeMirrorHTML' );
 
