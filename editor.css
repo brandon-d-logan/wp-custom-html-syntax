@@ -7,24 +7,20 @@
  *
  * In the modal version (Gutenberg trunk), the wrapper sits inside a
  * .block-library-html__modal-tab. Both are styled here.
+ *
+ * Use a fixed height with internal scrolling so a long document doesn't
+ * blow out the editor canvas — matches the prior textarea's visual cap.
  */
 
 [data-type="core/html"] .CodeMirror,
 .wp-block-html .CodeMirror,
 .block-library-html__modal-tab .CodeMirror {
-    height: auto;
-    min-height: 220px;
+    height: 250px;
     font-size: 13px;
     font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
     line-height: 1.65;
     border: 1px solid #949494;
     border-radius: 2px;
-}
-
-[data-type="core/html"] .CodeMirror-scroll,
-.wp-block-html .CodeMirror-scroll,
-.block-library-html__modal-tab .CodeMirror-scroll {
-    min-height: 220px;
 }
 
 [data-type="core/html"] .CodeMirror-focused,

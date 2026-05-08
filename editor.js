@@ -94,6 +94,13 @@
         cm.matchBrackets     = true;
         cm.autoCloseBrackets = true;
 
+        // CSSLint / HTMLHint don't understand modern syntax (e.g. the CSS
+        // Nesting Module) and produce false positives on valid code. We
+        // only want highlighting, not linting — disable the linter and
+        // drop its gutter.
+        cm.lint    = false;
+        cm.gutters = [ 'CodeMirror-linenumbers' ];
+
         return settings;
     }
 
