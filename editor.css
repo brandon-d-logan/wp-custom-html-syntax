@@ -163,21 +163,22 @@
  *     top/left/width/height inline so the overlay clears the editor
  *     header and the right-hand sidebar.
  *
- * !important defeats the scoped base `height: 250px` rule above.
+ * No !important here: the chsh-expanded rule sits after the base
+ * `.CodeMirror { height: 250px }` rule with equal specificity, so the
+ * cascade resolves it. Using !important would beat the *inline*
+ * width/height JS writes for the canvas-fit case, which would let the
+ * editor balloon to fit its full content and stop scrolling.
  */
-.CodeMirror.chsh-expanded {
+[data-type="core/html"] .CodeMirror.chsh-expanded,
+.wp-block-html .CodeMirror.chsh-expanded,
+.block-library-html__modal-tab .CodeMirror.chsh-expanded {
     position: fixed;
     inset: 24px;
-    width: auto !important;
-    height: auto !important;
+    width: auto;
+    height: auto;
     z-index: 100000;
     border-radius: 4px;
     box-shadow:
         0 10px 40px rgba( 0, 0, 0, 0.35 ),
         0 0 0 100vmax rgba( 0, 0, 0, 0.55 );
-}
-
-.CodeMirror.chsh-expanded .CodeMirror-scroll {
-    height: 100% !important;
-    max-height: none !important;
 }
