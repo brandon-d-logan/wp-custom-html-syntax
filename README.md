@@ -79,6 +79,12 @@ editor.css               — CodeMirror sizing, fold gutter styles, dark theme, 
 
 ---
 
+## Support
+
+For questions, feedback, or issues, please seek somebody else. Use at your own risk, your mileage may vary.
+
+---
+
 ## License
 
 License to Kill
