@@ -11,6 +11,8 @@
 
 defined( 'ABSPATH' ) || exit;
 
+define( 'CHSH_VERSION', '1.1.0' );
+
 add_action( 'enqueue_block_editor_assets', 'chsh_enqueue_editor_assets' );
 
 function chsh_enqueue_editor_assets() {
@@ -33,7 +35,7 @@ function chsh_enqueue_editor_assets() {
             'wp-compose',
             'wp-element',
         ),
-        '1.1.0',
+        CHSH_VERSION,
         true
     );
 
@@ -41,7 +43,7 @@ function chsh_enqueue_editor_assets() {
         'chsh-editor',
         plugin_dir_url( __FILE__ ) . 'editor.css',
         array( 'code-editor' ),
-        '1.1.0'
+        CHSH_VERSION
     );
 
     // Config values exposed to JS as window.chshSettings
