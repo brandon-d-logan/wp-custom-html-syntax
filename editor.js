@@ -168,7 +168,9 @@
         return found;
     }
 
-    function setExpanded( clientId, expanded ) {
+    const DEFAULT_TITLE = 'Custom HTML';
+
+    function setExpanded( clientId, expanded, title ) {
         if ( expanded ) {
             expandedBlocks.add( clientId );
         } else {
@@ -178,7 +180,7 @@
         wrappers.forEach( function ( wrapper ) {
             wrapper.classList.toggle( EXPANDED_CLASS, !! expanded );
             if ( expanded ) {
-                ensureHeader( wrapper, clientId );
+                ensureHeader( wrapper, clientId, title );
             } else {
                 removeHeader( wrapper );
             }
@@ -201,13 +203,28 @@
         } ) );
     }
 
+    // Update the header title for an already-expanded block so a rename
+    // performed via the inspector reflects in the pop-out without having
+    // to close and reopen.
+    function setHeaderTitle( clientId, title ) {
+        if ( ! expandedBlocks.has( clientId ) ) return;
+        findCmWrappersForBlock( clientId ).forEach( function ( wrapper ) {
+            const header = headerFor( wrapper );
+            if ( ! header ) return;
+            const t = header.querySelector( '.' + HEADER_CLASS + '__title' );
+            if ( t ) t.textContent = title || DEFAULT_TITLE;
+        } );
+    }
+
     // The pop-out header is a sibling element inserted just before the
     // CodeMirror wrapper in the same document — important because the
     // wrapper may live inside the editor canvas iframe, and a header in a
     // different document couldn't share `position: fixed` coordinates.
-    function ensureHeader( wrapper, clientId ) {
+    function ensureHeader( wrapper, clientId, title ) {
         const prev = wrapper.previousElementSibling;
         if ( prev && prev.classList && prev.classList.contains( HEADER_CLASS ) ) {
+            const t = prev.querySelector( '.' + HEADER_CLASS + '__title' );
+            if ( t ) t.textContent = title || DEFAULT_TITLE;
             return prev;
         }
         const doc    = wrapper.ownerDocument;
@@ -215,9 +232,9 @@
         header.className = HEADER_CLASS;
         if ( getDarkMode() ) header.classList.add( HEADER_DARK_CLASS );
 
-        const title = doc.createElement( 'span' );
-        title.className   = HEADER_CLASS + '__title';
-        title.textContent = 'Custom HTML';
+        const titleEl = doc.createElement( 'span' );
+        titleEl.className   = HEADER_CLASS + '__title';
+        titleEl.textContent = title || DEFAULT_TITLE;
 
         const close = doc.createElement( 'button' );
         close.type      = 'button';
@@ -225,18 +242,20 @@
         close.setAttribute( 'aria-label', 'Collapse editor' );
         close.title     = 'Collapse editor (Esc)';
         // Inline SVG so it renders identically in iframe and top docs
-        // without depending on an external icon font.
+        // without depending on an external icon font. Drawn as two thick
+        // stroked diagonals (3px @ 24-unit viewBox, with rounded caps) so
+        // the X reads as a deliberate close button rather than a thin
+        // text glyph.
         close.innerHTML =
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
             'width="18" height="18" aria-hidden="true" focusable="false">' +
-            '<path fill="currentColor" d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4' +
-            'L10.6 13.4 5.7 18.3 4.3 16.9 11.2 12 4.3 5.7 5.7 4.3l4.9 ' +
-            '4.9 6.3-6.3z"/></svg>';
+            '<path fill="none" stroke="currentColor" stroke-width="3" ' +
+            'stroke-linecap="round" d="M6 6 L18 18 M18 6 L6 18"/></svg>';
         close.addEventListener( 'click', function () {
             setExpanded( clientId, false );
         } );
 
-        header.appendChild( title );
+        header.appendChild( titleEl );
         header.appendChild( close );
         wrapper.parentNode.insertBefore( header, wrapper );
         return header;
@@ -720,6 +739,23 @@
                         };
                     }, [ props.clientId ] );
 
+                    // The user can rename a block via the inspector
+                    // ("Block Name"); that lives at attributes.metadata.name.
+                    // Fall back to "Custom HTML" when it isn't set.
+                    const blockName = (
+                        props.attributes &&
+                        props.attributes.metadata &&
+                        props.attributes.metadata.name
+                    ) || '';
+
+                    // Live-update the popped-out header when the user
+                    // renames the block while it's expanded.
+                    useEffect( function () {
+                        if ( expandedBlocks.has( props.clientId ) ) {
+                            setHeaderTitle( props.clientId, blockName );
+                        }
+                    }, [ props.clientId, blockName ] );
+
                     return el(
                         Fragment,
                         null,
@@ -737,7 +773,11 @@
                                         : __( 'Expand editor', 'chsh' ),
                                     isPressed: expanded,
                                     onClick:   function () {
-                                        setExpanded( props.clientId, ! expanded );
+                                        setExpanded(
+                                            props.clientId,
+                                            ! expanded,
+                                            blockName
+                                        );
                                     },
                                 } ),
                                 el( ToolbarButton, {
