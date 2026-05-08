@@ -3,7 +3,7 @@
  * Plugin Name:       Custom HTML Syntax Highlighter
  * Description:       Adds CodeMirror syntax highlighting to the Custom HTML
  *                    block — using WP's own bundled CodeMirror. No CDN needed.
- * Version:           1.3.2
+ * Version:           1.4.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * License:           License to Kill
@@ -11,25 +11,41 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'CHSH_VERSION', '1.3.2' );
+define( 'CHSH_VERSION', '1.4.0' );
 
 add_action( 'enqueue_block_editor_assets', 'chsh_enqueue_editor_assets' );
 
 function chsh_enqueue_editor_assets() {
 
-    // ── Core CodeMirror (bundled in WP since 4.9) ────────────────────────────
-    // wp_enqueue_code_editor() registers wp-codemirror, the code-editor style,
-    // and prints the requested htmlmixed mode + standard addons (including
-    // matchbrackets / closebrackets) inline. The individual mode/addon script
-    // handles ("codemirror-mode-htmlmixed", etc.) are NOT registered in core,
-    // so depending on them silently prevents our editor.js from enqueuing.
-    wp_enqueue_code_editor( array( 'type' => 'text/html' ) );
+    // wp_enqueue_code_editor():
+    //   - Enqueues `code-editor` (which depends on jquery, wp-codemirror,
+    //     underscore) and the `code-editor` stylesheet.
+    //   - Prints the htmlmixed mode + standard addons inline.
+    //   - Returns the settings object that wp.codeEditor.initialize()
+    //     expects (or `false` when the user has the
+    //     `syntax_highlighting` profile pref disabled).
+    //
+    // Source: wp-includes/general-template.php
+    $cm_settings = wp_enqueue_code_editor( array( 'type' => 'text/html' ) );
 
-    // ── Our files ────────────────────────────────────────────────────────────
+    // If the user has syntax highlighting disabled in their profile,
+    // wp_enqueue_code_editor() bails. Force-enqueue the assets and
+    // synthesise the settings ourselves so the highlighter still runs in
+    // the block editor.
+    if ( false === $cm_settings ) {
+        wp_enqueue_script( 'code-editor' );
+        wp_enqueue_style( 'code-editor' );
+        $cm_settings = wp_get_code_editor_settings(
+            array( 'type' => 'text/html' )
+        );
+    }
+
     wp_enqueue_script(
         'chsh-editor',
         plugin_dir_url( __FILE__ ) . 'editor.js',
-        array( 'wp-codemirror', 'wp-dom-ready' ),
+        // `code-editor` provides wp.codeEditor.initialize and pulls in
+        // wp-codemirror (which exposes wp.CodeMirror).
+        array( 'code-editor', 'wp-dom-ready' ),
         CHSH_VERSION,
         true
     );
@@ -41,13 +57,13 @@ function chsh_enqueue_editor_assets() {
         CHSH_VERSION
     );
 
-    // Config values exposed to JS as window.chshSettings
     wp_localize_script(
         'chsh-editor',
         'chshSettings',
         array(
-            'tabSize' => 2,
-            'theme'   => 'default',
+            'codeEditor' => $cm_settings ? $cm_settings : new stdClass(),
+            'tabSize'    => 2,
+            'theme'      => 'default',
         )
     );
 }
