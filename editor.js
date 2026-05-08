@@ -158,6 +158,7 @@
         const wrappers = findCmWrappersForBlock( clientId );
         wrappers.forEach( function ( wrapper ) {
             wrapper.classList.toggle( EXPANDED_CLASS, !! expanded );
+            applyExpandedBounds( wrapper );
             // CodeMirror caches its viewport size; nudge it after the
             // wrapper resizes so the gutters/scroller redraw correctly.
             const cm = wrapper.CodeMirror;
@@ -170,9 +171,130 @@
                 } );
             }
         } );
+        updateBoundsListener();
         window.dispatchEvent( new CustomEvent( EXPAND_EVENT, {
             detail: { clientId: clientId, expanded: !! expanded },
         } ) );
+    }
+
+    // The expanded overlay needs to live inside the editor *canvas* — i.e.
+    // not under the WP editor header or behind the right-hand sidebar.
+    //
+    // - In the iframed canvas (modern Gutenberg), the wrapper's
+    //   ownerDocument is the iframe doc, whose viewport already excludes
+    //   the chrome. position: fixed against that viewport is exactly what
+    //   we want, so we leave inline styles cleared and let the CSS rule
+    //   handle inset:24px.
+    // - In the top doc (older inline-textarea path, or modal portal),
+    //   position: fixed measures against the whole window, which slides
+    //   under the editor header / sidebar. Measure the canvas region and
+    //   apply matching inline coords instead.
+    const CANVAS_CANDIDATES = [
+        '.interface-interface-skeleton__content',
+        '.editor-visual-editor',
+        '.edit-post-visual-editor',
+        '.editor-styles-wrapper',
+    ];
+    const EDGE_INSET = 24;
+
+    function findCanvasRect() {
+        for ( let i = 0; i < CANVAS_CANDIDATES.length; i++ ) {
+            const el = document.querySelector( CANVAS_CANDIDATES[ i ] );
+            if ( el ) {
+                const r = el.getBoundingClientRect();
+                if ( r.width > 0 && r.height > 0 ) return r;
+            }
+        }
+        return null;
+    }
+
+    function clearBoundsStyles( style ) {
+        style.top = style.left = style.right = style.bottom = '';
+        style.width = style.height = '';
+    }
+
+    function applyExpandedBounds( wrapper ) {
+        const expanded = wrapper.classList.contains( EXPANDED_CLASS );
+        const style    = wrapper.style;
+        if ( ! expanded ) {
+            clearBoundsStyles( style );
+            return;
+        }
+        // Iframe doc: defer to the CSS rule (inset:24px against the
+        // iframe's own viewport, which already excludes the chrome).
+        if ( wrapper.ownerDocument !== document ) {
+            clearBoundsStyles( style );
+            return;
+        }
+        const rect = findCanvasRect();
+        if ( ! rect ) {
+            clearBoundsStyles( style );
+            return;
+        }
+        // Inline width/height + auto right/bottom take priority over the
+        // stylesheet's `inset: 24px` shorthand so the overlay fits the
+        // canvas region and not the whole window.
+        style.top    = ( rect.top + EDGE_INSET ) + 'px';
+        style.left   = ( rect.left + EDGE_INSET ) + 'px';
+        style.right  = 'auto';
+        style.bottom = 'auto';
+        style.width  = Math.max( 0, rect.width  - EDGE_INSET * 2 ) + 'px';
+        style.height = Math.max( 0, rect.height - EDGE_INSET * 2 ) + 'px';
+    }
+
+    function reapplyAllBounds() {
+        expandedBlocks.forEach( function ( id ) {
+            findCmWrappersForBlock( id ).forEach( function ( w ) {
+                applyExpandedBounds( w );
+                const cm = w.CodeMirror;
+                if ( cm ) { try { cm.refresh(); } catch ( e ) {} }
+            } );
+        } );
+    }
+
+    // window.resize covers browser resize; a ResizeObserver on the canvas
+    // covers the sidebar/inspector being toggled, which doesn't change
+    // the window size but does shrink the canvas region we're tracking.
+    let boundsListenerAttached = false;
+    let canvasResizeObserver   = null;
+    let observedCanvas         = null;
+
+    function updateBoundsListener() {
+        const want = expandedBlocks.size > 0;
+        if ( want === boundsListenerAttached ) {
+            // Even if listener state is unchanged, the canvas element may
+            // have been swapped out (e.g. iframe re-mount); refresh it.
+            if ( want ) syncCanvasObserver();
+            return;
+        }
+        if ( want ) {
+            window.addEventListener( 'resize', reapplyAllBounds );
+            syncCanvasObserver();
+        } else {
+            window.removeEventListener( 'resize', reapplyAllBounds );
+            if ( canvasResizeObserver ) {
+                canvasResizeObserver.disconnect();
+            }
+            observedCanvas = null;
+        }
+        boundsListenerAttached = want;
+    }
+
+    function syncCanvasObserver() {
+        if ( typeof window.ResizeObserver !== 'function' ) return;
+        let canvasEl = null;
+        for ( let i = 0; i < CANVAS_CANDIDATES.length; i++ ) {
+            canvasEl = document.querySelector( CANVAS_CANDIDATES[ i ] );
+            if ( canvasEl ) break;
+        }
+        if ( ! canvasEl || canvasEl === observedCanvas ) return;
+        if ( ! canvasResizeObserver ) {
+            canvasResizeObserver = new window.ResizeObserver( reapplyAllBounds );
+        } else {
+            canvasResizeObserver.disconnect();
+        }
+        canvasResizeObserver.observe( canvasEl );
+        observedCanvas = canvasEl;
     }
 
     // ESC closes whatever is expanded. Listening on the top document is

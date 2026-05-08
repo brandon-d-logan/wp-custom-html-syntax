@@ -152,19 +152,22 @@
 /*
  * Pop-out / expanded mode. Toggled from the block toolbar — see
  * editor.js → setExpanded(). Promotes the CodeMirror wrapper out of the
- * block flow into a viewport overlay so a long document is easier to see
- * and edit. ESC (handled in JS) collapses it.
+ * block flow into an overlay sized to the editor canvas so a long
+ * document is easier to see and edit. ESC (handled in JS) collapses it.
  *
- * The selectors override the 250px height set above. We use !important
- * because the base rule is itself scoped and we need to win against it
- * regardless of source order.
+ * Two sizing paths:
+ *   - In the iframed canvas, position:fixed measures against the iframe
+ *     viewport (which already excludes the WP header/sidebars), so the
+ *     `inset: 24px` fallback below is correct.
+ *   - In the top document, JS measures the canvas region and writes
+ *     top/left/width/height inline so the overlay clears the editor
+ *     header and the right-hand sidebar.
+ *
+ * !important defeats the scoped base `height: 250px` rule above.
  */
 .CodeMirror.chsh-expanded {
     position: fixed;
-    top: 24px;
-    left: 24px;
-    right: 24px;
-    bottom: 24px;
+    inset: 24px;
     width: auto !important;
     height: auto !important;
     z-index: 100000;
