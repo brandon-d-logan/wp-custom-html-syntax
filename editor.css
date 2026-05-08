@@ -39,6 +39,52 @@
 }
 
 /*
+ * Fold gutter. WP's bundled wp-codemirror includes the foldcode/foldgutter
+ * addons but does not ship their stylesheet, so we provide it here. The
+ * marker glyphs come from CodeMirror's reference foldgutter.css and are
+ * scoped to editors this plugin manages.
+ *   https://codemirror.net/5/addon/fold/foldgutter.css
+ */
+[data-type="core/html"] .CodeMirror-foldmarker,
+.wp-block-html .CodeMirror-foldmarker,
+.block-library-html__modal-tab .CodeMirror-foldmarker {
+    color: #00f;
+    text-shadow: #b9f 1px 1px 2px, #b9f -1px -1px 2px,
+                 #b9f 1px -1px 2px, #b9f -1px 1px 2px;
+    font-family: arial;
+    line-height: .3;
+    cursor: pointer;
+}
+
+[data-type="core/html"] .CodeMirror-foldgutter,
+.wp-block-html .CodeMirror-foldgutter,
+.block-library-html__modal-tab .CodeMirror-foldgutter {
+    width: 1.2em;
+}
+
+[data-type="core/html"] .CodeMirror-foldgutter-open,
+[data-type="core/html"] .CodeMirror-foldgutter-folded,
+.wp-block-html .CodeMirror-foldgutter-open,
+.wp-block-html .CodeMirror-foldgutter-folded,
+.block-library-html__modal-tab .CodeMirror-foldgutter-open,
+.block-library-html__modal-tab .CodeMirror-foldgutter-folded {
+    cursor: pointer;
+    color: #888;
+}
+
+[data-type="core/html"] .CodeMirror-foldgutter-open:after,
+.wp-block-html .CodeMirror-foldgutter-open:after,
+.block-library-html__modal-tab .CodeMirror-foldgutter-open:after {
+    content: "\25BE"; /* ▾ */
+}
+
+[data-type="core/html"] .CodeMirror-foldgutter-folded:after,
+.wp-block-html .CodeMirror-foldgutter-folded:after,
+.block-library-html__modal-tab .CodeMirror-foldgutter-folded:after {
+    content: "\25B8"; /* ▸ */
+}
+
+/*
  * Dark theme — registered as `chsh-dark`, applied by CodeMirror via
  * cm.setOption('theme', 'chsh-dark') which puts `cm-s-chsh-dark` on the
  * wrapper element. Selectors are scoped to the Custom HTML block so this
@@ -65,6 +111,15 @@
 }
 
 .cm-s-chsh-dark .CodeMirror-linenumber  { color: #858585; }
+.cm-s-chsh-dark .CodeMirror-foldgutter-open,
+.cm-s-chsh-dark .CodeMirror-foldgutter-folded { color: #c8c8c8; }
+.cm-s-chsh-dark .CodeMirror-foldmarker {
+    color: #569cd6;
+    text-shadow: none;
+    background: #2a2a2a;
+    border-radius: 2px;
+    padding: 0 4px;
+}
 .cm-s-chsh-dark .CodeMirror-cursor      { border-left-color: #d4d4d4; }
 .cm-s-chsh-dark .CodeMirror-selected    { background: #264f78; }
 .cm-s-chsh-dark.CodeMirror-focused .CodeMirror-selected,
