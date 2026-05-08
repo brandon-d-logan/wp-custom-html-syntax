@@ -1,19 +1,20 @@
-/* global CodeMirror, chshSettings, wp */
+/* global chshSettings, wp */
 /**
  * Adds CodeMirror syntax highlighting to the Custom HTML block (core/html).
  *
- * Block API v3 (current trunk) doesn't render a textarea inside the block
- * itself — the block edit only shows a Placeholder or a Preview, with an
- * "Edit code" button that opens HTMLEditModal. The modal renders three
- * <PlainText> editors (HTML / CSS / JS) with class
- * `block-library-html__modal-editor`.
+ * Uses WordPress's documented code editor API — wp.codeEditor.initialize()
+ * — which delegates to the WP-bundled wp.CodeMirror. We do NOT rely on a
+ * global `CodeMirror`, because WP's codemirror.min.js exposes itself as
+ * `window.wp.CodeMirror`; a stray global `CodeMirror` from another plugin
+ * can shadow it and lack `fromTextArea`.
  *
- * So: we leave the block edit alone (replacing it broke the
- * Placeholder/Preview/Modal flow and tripped the block error boundary)
- * and enhance the modal's textareas when they appear in the DOM.
- *
- * Block source for reference:
- *   https://github.com/WordPress/gutenberg/tree/trunk/packages/block-library/src/html
+ * References:
+ *   wp.codeEditor.initialize:
+ *     https://developer.wordpress.org/reference/functions/wp_enqueue_code_editor/
+ *   Bundled CodeMirror:
+ *     wp-includes/js/codemirror/codemirror.min.js  (exports to wp.CodeMirror)
+ *   core/html block (current WP, inline-textarea version):
+ *     https://github.com/WordPress/gutenberg/blob/51437a9/packages/block-library/src/html/edit.js
  */
 ( function () {
     'use strict';
@@ -30,9 +31,11 @@
 
     log( 'editor.js loaded' );
 
-    if ( typeof CodeMirror === 'undefined' ) {
+    if ( ! window.wp || ! wp.codeEditor || ! wp.codeEditor.initialize ) {
         // eslint-disable-next-line no-console
-        console.warn( '[chsh] CodeMirror not loaded; skipping.' );
+        console.warn(
+            '[chsh] wp.codeEditor.initialize unavailable; skipping.'
+        );
         return;
     }
 
@@ -73,48 +76,54 @@
         return 'htmlmixed';
     }
 
+    function buildSettings( textarea ) {
+        const base =
+            ( window.chshSettings && chshSettings.codeEditor ) || {};
+        // Clone so per-textarea overrides don't leak.
+        const settings = JSON.parse( JSON.stringify( base ) );
+        settings.codemirror = settings.codemirror || {};
+
+        const cm = settings.codemirror;
+        cm.mode              = modeFor( textarea );
+        cm.theme             = settingsTheme();
+        cm.lineNumbers       = true;
+        cm.lineWrapping      = true;
+        cm.indentUnit        = settingsTabSize();
+        cm.tabSize           = settingsTabSize();
+        cm.indentWithTabs    = false;
+        cm.matchBrackets     = true;
+        cm.autoCloseBrackets = true;
+
+        return settings;
+    }
+
     function attachEditor( textarea ) {
         if ( ! textarea || initialized.has( textarea ) ) return;
         initialized.add( textarea );
 
         log( 'attaching CodeMirror to', textarea );
 
-        let cm;
+        let instance;
         try {
-            cm = CodeMirror.fromTextArea( textarea, {
-                mode:              modeFor( textarea ),
-                theme:             settingsTheme(),
-                lineNumbers:       true,
-                lineWrapping:      true,
-                indentUnit:        settingsTabSize(),
-                tabSize:           settingsTabSize(),
-                indentWithTabs:    false,
-                matchBrackets:     true,
-                autoCloseBrackets: true,
-                extraKeys: {
-                    Tab: function ( editor ) {
-                        if ( editor.somethingSelected() ) {
-                            editor.indentSelection( 'add' );
-                        } else {
-                            editor.replaceSelection(
-                                ' '.repeat( settingsTabSize() ),
-                                'end'
-                            );
-                        }
-                    },
-                    'Shift-Tab': function ( editor ) {
-                        editor.indentSelection( 'subtract' );
-                    },
-                },
-            } );
+            instance = wp.codeEditor.initialize(
+                textarea,
+                buildSettings( textarea )
+            );
         } catch ( err ) {
             // eslint-disable-next-line no-console
-            console.error( '[chsh] CodeMirror init failed:', err );
+            console.error( '[chsh] codeEditor.initialize failed:', err );
+            return;
+        }
+
+        const cm = instance && instance.codemirror;
+        if ( ! cm ) {
+            // eslint-disable-next-line no-console
+            console.error( '[chsh] no codemirror instance returned' );
             return;
         }
 
         // Push CodeMirror edits back into the React-controlled <textarea>
-        // so PlainText's onChange fires and the modal's local state updates.
+        // so PlainText's onChange fires and block attributes update.
         const win = textarea.ownerDocument.defaultView || window;
         const nativeSetter = Object.getOwnPropertyDescriptor(
             win.HTMLTextAreaElement.prototype,
@@ -126,7 +135,23 @@
             textarea.dispatchEvent( new Event( 'input', { bubbles: true } ) );
         } );
 
-        // Tab switches and modal mounting can leave CM with a stale layout.
+        // The Tab key would otherwise move focus; make it indent.
+        cm.setOption( 'extraKeys', {
+            Tab: function ( editor ) {
+                if ( editor.somethingSelected() ) {
+                    editor.indentSelection( 'add' );
+                } else {
+                    editor.replaceSelection(
+                        ' '.repeat( settingsTabSize() ),
+                        'end'
+                    );
+                }
+            },
+            'Shift-Tab': function ( editor ) {
+                editor.indentSelection( 'subtract' );
+            },
+        } );
+
         cm.on( 'focus', function () {
             cm.refresh();
         } );
