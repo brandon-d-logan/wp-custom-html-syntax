@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name:       Custom HTML Syntax Highlighter
- * Description:       Adds CodeMirror syntax highlighting to the Custom HTML
- *                    block — using WP's own bundled CodeMirror. No CDN needed.
+ * Description:       Adds CodeMirror syntax highlighting to the Custom HTML block — using WP's own bundled CodeMirror. No CDN needed.
+ * Author:            Brandon Logan                  
  * Version:           1.8.1
  * Requires at least: 6.0
  * Requires PHP:      7.4
