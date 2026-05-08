@@ -18,14 +18,34 @@
 ( function () {
     'use strict';
 
+    // eslint-disable-next-line no-console
+    const log = function () {
+        if ( window.chshDebug !== false ) {
+            // eslint-disable-next-line no-console
+            console.log.apply( console, [ '[chsh]' ].concat(
+                Array.prototype.slice.call( arguments )
+            ) );
+        }
+    };
+
+    log( 'editor.js loaded' );
+
     if ( typeof CodeMirror === 'undefined' ) {
         // eslint-disable-next-line no-console
         console.warn( '[chsh] CodeMirror not loaded; skipping.' );
         return;
     }
 
-    const SELECTOR = 'textarea.block-library-html__modal-editor';
+    // The modal's <PlainText> renders TextareaAutosize with className
+    //   clsx('block-editor-plain-text', 'block-library-html__modal-editor').
+    // Match either, to be tolerant of older Gutenberg releases.
+    const SELECTOR = [
+        'textarea.block-library-html__modal-editor',
+        '.block-library-html__modal-tab textarea',
+        '.block-library-html__modal textarea',
+    ].join( ', ' );
     const initialized = new WeakSet();
+    const watchedDocs = new WeakSet();
 
     function settingsTabSize() {
         return ( window.chshSettings && chshSettings.tabSize ) || 2;
@@ -46,6 +66,8 @@
     function attachEditor( textarea ) {
         if ( ! textarea || initialized.has( textarea ) ) return;
         initialized.add( textarea );
+
+        log( 'attaching CodeMirror to', textarea );
 
         let cm;
         try {
@@ -108,12 +130,17 @@
         root.querySelectorAll( SELECTOR ).forEach( attachEditor );
     }
 
-    wp.domReady( function () {
-        scan( document );
+    function watchDoc( doc ) {
+        if ( ! doc || ! doc.body || watchedDocs.has( doc ) ) return;
+        watchedDocs.add( doc );
+        log( 'watching document', doc === document ? '(top)' : '(iframe)' );
+        scan( doc );
 
-        // The modal mounts on demand (and tabs swap textareas in/out), so
-        // watch for the editor textareas appearing anywhere in the DOM.
-        new MutationObserver( function ( mutations ) {
+        const Observer =
+            ( doc.defaultView && doc.defaultView.MutationObserver ) ||
+            window.MutationObserver;
+
+        new Observer( function ( mutations ) {
             for ( let i = 0; i < mutations.length; i++ ) {
                 const added = mutations[ i ].addedNodes;
                 for ( let j = 0; j < added.length; j++ ) {
@@ -126,6 +153,29 @@
                     }
                 }
             }
-        } ).observe( document.body, { childList: true, subtree: true } );
+        } ).observe( doc.body, { childList: true, subtree: true } );
+    }
+
+    function watchIframes() {
+        // The Modal renders to a portal; in some setups the portal target is
+        // inside the editor canvas iframe rather than the top document.
+        const iframes = document.querySelectorAll( 'iframe' );
+        for ( let i = 0; i < iframes.length; i++ ) {
+            let doc;
+            try { doc = iframes[ i ].contentDocument; } catch ( e ) { continue; }
+            if ( doc ) watchDoc( doc );
+            iframes[ i ].addEventListener( 'load', function () {
+                try { watchDoc( iframes[ i ].contentDocument ); } catch ( e ) {}
+            } );
+        }
+    }
+
+    wp.domReady( function () {
+        watchDoc( document );
+        watchIframes();
+        new MutationObserver( watchIframes ).observe( document.body, {
+            childList: true,
+            subtree:   true,
+        } );
     } );
 } )();
