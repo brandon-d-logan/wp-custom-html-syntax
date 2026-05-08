@@ -73,6 +73,9 @@
     const DARK_EVENT   = 'chsh:darkmode-changed';
     const EXPAND_EVENT = 'chsh:expand-changed';
     const EXPANDED_CLASS = 'chsh-expanded';
+    const HEADER_CLASS   = 'chsh-expand-header';
+    const HEADER_DARK_CLASS = 'chsh-expand-header--dark';
+    const HEADER_HEIGHT  = 36;
 
     function getDarkMode() {
         try {
@@ -104,11 +107,26 @@
         }
     }
 
+    function applyHeaderTheme() {
+        const dark = getDarkMode();
+        function paint( doc ) {
+            if ( ! doc || ! doc.querySelectorAll ) return;
+            doc.querySelectorAll( '.' + HEADER_CLASS ).forEach( function ( h ) {
+                h.classList.toggle( HEADER_DARK_CLASS, dark );
+            } );
+        }
+        paint( document );
+        document.querySelectorAll( 'iframe' ).forEach( function ( f ) {
+            try { paint( f.contentDocument ); } catch ( e ) {}
+        } );
+    }
+
     function setDarkMode( enabled ) {
         try {
             window.localStorage.setItem( STORAGE_KEY, enabled ? '1' : '0' );
         } catch ( e ) {}
         applyThemeToAll( enabled ? DARK_THEME : LIGHT_THEME );
+        applyHeaderTheme();
         window.dispatchEvent( new CustomEvent( DARK_EVENT, {
             detail: { enabled: !! enabled },
         } ) );
@@ -118,6 +136,7 @@
         if ( e.key !== STORAGE_KEY ) return;
         const enabled = e.newValue === '1';
         applyThemeToAll( enabled ? DARK_THEME : LIGHT_THEME );
+        applyHeaderTheme();
         window.dispatchEvent( new CustomEvent( DARK_EVENT, {
             detail: { enabled: enabled },
         } ) );
@@ -158,6 +177,11 @@
         const wrappers = findCmWrappersForBlock( clientId );
         wrappers.forEach( function ( wrapper ) {
             wrapper.classList.toggle( EXPANDED_CLASS, !! expanded );
+            if ( expanded ) {
+                ensureHeader( wrapper, clientId );
+            } else {
+                removeHeader( wrapper );
+            }
             applyExpandedBounds( wrapper );
             // CodeMirror caches its viewport size; nudge it after the
             // wrapper resizes so the gutters/scroller redraw correctly.
@@ -175,6 +199,54 @@
         window.dispatchEvent( new CustomEvent( EXPAND_EVENT, {
             detail: { clientId: clientId, expanded: !! expanded },
         } ) );
+    }
+
+    // The pop-out header is a sibling element inserted just before the
+    // CodeMirror wrapper in the same document — important because the
+    // wrapper may live inside the editor canvas iframe, and a header in a
+    // different document couldn't share `position: fixed` coordinates.
+    function ensureHeader( wrapper, clientId ) {
+        const prev = wrapper.previousElementSibling;
+        if ( prev && prev.classList && prev.classList.contains( HEADER_CLASS ) ) {
+            return prev;
+        }
+        const doc    = wrapper.ownerDocument;
+        const header = doc.createElement( 'div' );
+        header.className = HEADER_CLASS;
+        if ( getDarkMode() ) header.classList.add( HEADER_DARK_CLASS );
+
+        const title = doc.createElement( 'span' );
+        title.className   = HEADER_CLASS + '__title';
+        title.textContent = 'Custom HTML';
+
+        const close = doc.createElement( 'button' );
+        close.type      = 'button';
+        close.className = HEADER_CLASS + '__close';
+        close.setAttribute( 'aria-label', 'Collapse editor' );
+        close.title     = 'Collapse editor (Esc)';
+        // Inline SVG so it renders identically in iframe and top docs
+        // without depending on an external icon font.
+        close.innerHTML =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
+            'width="18" height="18" aria-hidden="true" focusable="false">' +
+            '<path fill="currentColor" d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4' +
+            'L10.6 13.4 5.7 18.3 4.3 16.9 11.2 12 4.3 5.7 5.7 4.3l4.9 ' +
+            '4.9 6.3-6.3z"/></svg>';
+        close.addEventListener( 'click', function () {
+            setExpanded( clientId, false );
+        } );
+
+        header.appendChild( title );
+        header.appendChild( close );
+        wrapper.parentNode.insertBefore( header, wrapper );
+        return header;
+    }
+
+    function removeHeader( wrapper ) {
+        const prev = wrapper.previousElementSibling;
+        if ( prev && prev.classList && prev.classList.contains( HEADER_CLASS ) ) {
+            prev.remove();
+        }
     }
 
     // The expanded overlay needs to live inside the editor *canvas* — i.e.
@@ -213,33 +285,64 @@
         style.width = style.height = '';
     }
 
+    function headerFor( wrapper ) {
+        const prev = wrapper.previousElementSibling;
+        if ( prev && prev.classList && prev.classList.contains( HEADER_CLASS ) ) {
+            return prev;
+        }
+        return null;
+    }
+
     function applyExpandedBounds( wrapper ) {
         const expanded = wrapper.classList.contains( EXPANDED_CLASS );
         const style    = wrapper.style;
+        const header   = headerFor( wrapper );
         if ( ! expanded ) {
             clearBoundsStyles( style );
+            if ( header ) clearBoundsStyles( header.style );
             return;
         }
-        // Iframe doc: defer to the CSS rule (inset:24px against the
-        // iframe's own viewport, which already excludes the chrome).
+        // Iframe doc: defer to the CSS rules. The expanded selector and
+        // the header selector both pin to `position: fixed` against the
+        // iframe viewport (which excludes the WP chrome), and stack
+        // header on top of editor without inline coords.
         if ( wrapper.ownerDocument !== document ) {
             clearBoundsStyles( style );
+            if ( header ) clearBoundsStyles( header.style );
             return;
         }
         const rect = findCanvasRect();
         if ( ! rect ) {
             clearBoundsStyles( style );
+            if ( header ) clearBoundsStyles( header.style );
             return;
         }
         // Inline width/height + auto right/bottom take priority over the
-        // stylesheet's `inset: 24px` shorthand so the overlay fits the
-        // canvas region and not the whole window.
-        style.top    = ( rect.top + EDGE_INSET ) + 'px';
-        style.left   = ( rect.left + EDGE_INSET ) + 'px';
+        // stylesheet's `inset` rules so the overlay fits the canvas
+        // region and not the whole window. The header sits above the
+        // wrapper and shares the same horizontal coords; the wrapper
+        // starts HEADER_HEIGHT below the header's top.
+        const top    = rect.top + EDGE_INSET;
+        const left   = rect.left + EDGE_INSET;
+        const width  = Math.max( 0, rect.width  - EDGE_INSET * 2 );
+        const height = Math.max( 0, rect.height - EDGE_INSET * 2 );
+
+        if ( header ) {
+            const hs = header.style;
+            hs.top    = top + 'px';
+            hs.left   = left + 'px';
+            hs.right  = 'auto';
+            hs.bottom = 'auto';
+            hs.width  = width + 'px';
+            hs.height = HEADER_HEIGHT + 'px';
+        }
+
+        style.top    = ( top + HEADER_HEIGHT ) + 'px';
+        style.left   = left + 'px';
         style.right  = 'auto';
         style.bottom = 'auto';
-        style.width  = Math.max( 0, rect.width  - EDGE_INSET * 2 ) + 'px';
-        style.height = Math.max( 0, rect.height - EDGE_INSET * 2 ) + 'px';
+        style.width  = width + 'px';
+        style.height = Math.max( 0, height - HEADER_HEIGHT ) + 'px';
     }
 
     function reapplyAllBounds() {

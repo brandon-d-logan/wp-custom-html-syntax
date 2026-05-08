@@ -173,12 +173,85 @@
 .wp-block-html .CodeMirror.chsh-expanded,
 .block-library-html__modal-tab .CodeMirror.chsh-expanded {
     position: fixed;
-    inset: 24px;
+    /* 24px edge inset + 36px header = 60px from top in the iframe-case
+     * fallback. JS overrides with inline coords for the top-doc case. */
+    top: 60px;
+    right: 24px;
+    bottom: 24px;
+    left: 24px;
     width: auto;
     height: auto;
     z-index: 100000;
-    border-radius: 4px;
+    border-radius: 0 0 4px 4px;
     box-shadow:
         0 10px 40px rgba( 0, 0, 0, 0.35 ),
         0 0 0 100vmax rgba( 0, 0, 0, 0.55 );
+}
+
+/*
+ * Pop-out header bar. Inserted as a sibling immediately before the
+ * CodeMirror wrapper when the editor is expanded; positioning is
+ * handled by JS for the canvas-fit case and by the fallback rule below
+ * for the iframe-canvas case.
+ */
+.chsh-expand-header {
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    left: 24px;
+    height: 36px;
+    z-index: 100001;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 8px 0 12px;
+    background: #f0f0f1;
+    color: #1e1e1e;
+    border: 1px solid #949494;
+    border-bottom: none;
+    border-radius: 4px 4px 0 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+    font-size: 13px;
+    box-sizing: border-box;
+}
+
+.chsh-expand-header__title {
+    font-weight: 600;
+    user-select: none;
+}
+
+.chsh-expand-header__close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.chsh-expand-header__close:hover {
+    background: rgba( 0, 0, 0, 0.08 );
+}
+
+.chsh-expand-header__close:focus {
+    outline: 2px solid #007cba;
+    outline-offset: -2px;
+}
+
+/* Dark theme for the header — applied via JS when dark mode is on so
+ * the header matches the CodeMirror chsh-dark theme below. */
+.chsh-expand-header.chsh-expand-header--dark {
+    background: #252526;
+    color: #d4d4d4;
+    border-color: #3c3c3c;
+}
+
+.chsh-expand-header.chsh-expand-header--dark .chsh-expand-header__close:hover {
+    background: rgba( 255, 255, 255, 0.1 );
 }
