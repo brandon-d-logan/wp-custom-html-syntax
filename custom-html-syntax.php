@@ -16,31 +16,18 @@ add_action( 'enqueue_block_editor_assets', 'chsh_enqueue_editor_assets' );
 function chsh_enqueue_editor_assets() {
 
     // ── Core CodeMirror (bundled in WP since 4.9) ────────────────────────────
-    wp_enqueue_script( 'wp-codemirror' );
-
-    // Language modes for htmlmixed (HTML with embedded CSS & JS)
-    wp_enqueue_script( 'codemirror-mode-xml' );
-    wp_enqueue_script( 'codemirror-mode-javascript' );
-    wp_enqueue_script( 'codemirror-mode-css' );
-    wp_enqueue_script( 'codemirror-mode-htmlmixed' );
-
-    // Quality-of-life addons
-    wp_enqueue_script( 'codemirror-addon-edit-matchbrackets' );
-    wp_enqueue_script( 'codemirror-addon-edit-closebrackets' );
-
-    // CodeMirror base CSS + WP admin overrides
-    wp_enqueue_style( 'code-editor' );
+    // wp_enqueue_code_editor() registers wp-codemirror, the code-editor style,
+    // and prints the requested htmlmixed mode + standard addons (including
+    // matchbrackets / closebrackets) inline. The individual mode/addon script
+    // handles ("codemirror-mode-htmlmixed", etc.) are NOT registered in core,
+    // so depending on them silently prevents our editor.js from enqueuing.
+    wp_enqueue_code_editor( array( 'type' => 'text/html' ) );
 
     // ── Our files ────────────────────────────────────────────────────────────
     wp_enqueue_script(
         'chsh-editor',
         plugin_dir_url( __FILE__ ) . 'editor.js',
-        array(
-            'wp-dom-ready',
-            'codemirror-mode-htmlmixed',
-            'codemirror-addon-edit-closebrackets',
-            'codemirror-addon-edit-matchbrackets',
-        ),
+        array( 'wp-dom-ready', 'wp-codemirror' ),
         '1.0.0',
         true
     );
