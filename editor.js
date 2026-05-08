@@ -151,8 +151,31 @@
         // Nesting Module) and produce false positives on valid code. We
         // only want highlighting, not linting — disable the linter and
         // drop its gutter.
-        cm.lint    = false;
-        cm.gutters = [ 'CodeMirror-linenumbers' ];
+        cm.lint = false;
+
+        // Code folding. WP's bundled wp-codemirror concatenates the
+        // foldcode/foldgutter addons and the per-mode rangefinders
+        // (xml-fold for htmlmixed, brace-fold for js/css, comment-fold).
+        // Picking the rangefinder by mode keeps htmlmixed folding tags
+        // *and* embedded <script>/<style> braces.
+        //   https://codemirror.net/5/doc/manual.html#addon_foldcode
+        //   https://codemirror.net/5/doc/manual.html#addon_foldgutter
+        const CM = window.wp && window.wp.CodeMirror;
+        if ( CM && CM.fold ) {
+            cm.foldGutter = true;
+            cm.foldOptions = {
+                rangeFinder: CM.fold.combine.apply( null, [
+                    CM.fold.xml,
+                    CM.fold.brace,
+                    CM.fold.comment,
+                    CM.fold.indent,
+                ].filter( Boolean ) ),
+            };
+        }
+        cm.gutters = [
+            'CodeMirror-linenumbers',
+            'CodeMirror-foldgutter',
+        ];
 
         return settings;
     }
@@ -211,6 +234,14 @@
             },
             'Shift-Tab': function ( editor ) {
                 editor.indentSelection( 'subtract' );
+            },
+            // Toggle the fold containing the cursor — the conventional
+            // CodeMirror foldcode keybinding.
+            'Ctrl-Q': function ( editor ) {
+                editor.foldCode( editor.getCursor() );
+            },
+            'Cmd-Q': function ( editor ) {
+                editor.foldCode( editor.getCursor() );
             },
         } );
 
