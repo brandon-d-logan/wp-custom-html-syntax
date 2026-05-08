@@ -1,0 +1,36 @@
+/*
+ * Fit the CodeMirror editor into the Custom HTML block nicely.
+ * WP's own code-editor.css loads first (declared as a dependency),
+ * so we only need targeted overrides here.
+ */
+
+[data-type="core/html"] .CodeMirror,
+.wp-block-html .CodeMirror {
+    height: auto;
+    min-height: 220px;
+    font-size: 13px;
+    font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+    line-height: 1.65;
+    border: 1px solid #949494;
+    border-radius: 2px;
+}
+
+[data-type="core/html"] .CodeMirror-scroll,
+.wp-block-html .CodeMirror-scroll {
+    min-height: 220px;
+}
+
+/* Focus ring to match other WP block editor inputs */
+[data-type="core/html"] .CodeMirror-focused,
+.wp-block-html .CodeMirror-focused {
+    outline: none;
+    border-color: #007cba;
+    box-shadow: 0 0 0 1px #007cba;
+}
+
+/* Gutter (line numbers) background */
+[data-type="core/html"] .CodeMirror-gutters,
+.wp-block-html .CodeMirror-gutters {
+    border-right: 1px solid #ddd;
+    background: #f7f7f7;
+}
