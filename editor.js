@@ -1,17 +1,19 @@
 /* global CodeMirror, chshSettings, wp */
 /**
- * Replaces the core/html (Custom HTML) block's edit component with a
- * CodeMirror-backed editor.
+ * Adds CodeMirror syntax highlighting to the Custom HTML block (core/html).
  *
- * Block API v2 contract: the edit component's outermost element must
- * receive the props returned by `useBlockProps()`, otherwise Gutenberg's
- * block wrapper machinery (selection, refs, drag-and-drop, classnames)
- * has an incomplete contract and the block error boundary trips with
- * "This block has encountered an error and cannot be previewed".
+ * Block API v3 (current trunk) doesn't render a textarea inside the block
+ * itself — the block edit only shows a Placeholder or a Preview, with an
+ * "Edit code" button that opens HTMLEditModal. The modal renders three
+ * <PlainText> editors (HTML / CSS / JS) with class
+ * `block-library-html__modal-editor`.
  *
- * See:
- *   https://developer.wordpress.org/block-editor/reference-guides/block-api/block-edit-save/#useblockprops
- *   https://developer.wordpress.org/block-editor/reference-guides/filters/block-filters/#editor-blockedit
+ * So: we leave the block edit alone (replacing it broke the
+ * Placeholder/Preview/Modal flow and tripped the block error boundary)
+ * and enhance the modal's textareas when they appear in the DOM.
+ *
+ * Block source for reference:
+ *   https://github.com/WordPress/gutenberg/tree/trunk/packages/block-library/src/html
  */
 ( function () {
     'use strict';
@@ -22,115 +24,108 @@
         return;
     }
 
-    const { addFilter }                        = wp.hooks;
-    const { createHigherOrderComponent }       = wp.compose;
-    const { createElement, useEffect, useRef } = wp.element;
-    const { useBlockProps }                    = wp.blockEditor;
+    const SELECTOR = 'textarea.block-library-html__modal-editor';
+    const initialized = new WeakSet();
 
-    function HtmlEdit( props ) {
-        const blockProps = useBlockProps();
-
-        const { attributes, setAttributes } = props;
-        const content    = ( attributes && attributes.content ) || '';
-        const mountRef   = useRef( null );
-        const cmRef      = useRef( null );
-        const contentRef = useRef( content );
-
-        useEffect( function () {
-            if ( ! mountRef.current || cmRef.current ) return;
-
-            let cm;
-            try {
-                cm = CodeMirror( mountRef.current, {
-                    value:             content,
-                    mode:              'htmlmixed',
-                    theme:             ( window.chshSettings && chshSettings.theme ) || 'default',
-                    lineNumbers:       true,
-                    lineWrapping:      true,
-                    indentUnit:        ( window.chshSettings && chshSettings.tabSize ) || 2,
-                    tabSize:           ( window.chshSettings && chshSettings.tabSize ) || 2,
-                    indentWithTabs:    false,
-                    matchBrackets:     true,
-                    autoCloseBrackets: true,
-                    extraKeys: {
-                        Tab: function ( editor ) {
-                            const w = ( window.chshSettings && chshSettings.tabSize ) || 2;
-                            if ( editor.somethingSelected() ) {
-                                editor.indentSelection( 'add' );
-                            } else {
-                                editor.replaceSelection( ' '.repeat( w ), 'end' );
-                            }
-                        },
-                        'Shift-Tab': function ( editor ) {
-                            editor.indentSelection( 'subtract' );
-                        },
-                    },
-                } );
-            } catch ( err ) {
-                // eslint-disable-next-line no-console
-                console.error( '[chsh] CodeMirror init failed:', err );
-                return;
-            }
-
-            cm.on( 'change', function () {
-                const value = cm.getValue();
-                contentRef.current = value;
-                setAttributes( { content: value } );
-            } );
-
-            requestAnimationFrame( function () {
-                if ( cmRef.current ) cmRef.current.refresh();
-            } );
-
-            cmRef.current = cm;
-
-            return function () {
-                if ( cmRef.current ) {
-                    const wrapper = cmRef.current.getWrapperElement();
-                    if ( wrapper && wrapper.parentNode ) {
-                        wrapper.parentNode.removeChild( wrapper );
-                    }
-                    cmRef.current = null;
-                }
-            };
-            // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [] );
-
-        // Sync external content changes (undo/redo, programmatic edits) into
-        // CodeMirror — but skip echoes from our own onChange handler.
-        useEffect( function () {
-            const cm = cmRef.current;
-            if ( ! cm ) return;
-            if ( contentRef.current === content ) return;
-            contentRef.current = content;
-            const cursor = cm.getCursor();
-            cm.setValue( content );
-            try { cm.setCursor( cursor ); } catch ( e ) { /* noop */ }
-        }, [ content ] );
-
-        const className =
-            ( ( blockProps && blockProps.className ) || '' ) +
-            ' chsh-html-edit';
-
-        return createElement(
-            'div',
-            Object.assign( {}, blockProps, { className: className.trim() } ),
-            createElement( 'div', { ref: mountRef, className: 'chsh-cm-mount' } )
-        );
+    function settingsTabSize() {
+        return ( window.chshSettings && chshSettings.tabSize ) || 2;
     }
 
-    const replaceHtmlEdit = createHigherOrderComponent( function ( BlockEdit ) {
-        return function ( props ) {
-            if ( props.name === 'core/html' ) {
-                return createElement( HtmlEdit, props );
-            }
-            return createElement( BlockEdit, props );
-        };
-    }, 'withCodeMirrorHTML' );
+    function settingsTheme() {
+        return ( window.chshSettings && chshSettings.theme ) || 'default';
+    }
 
-    addFilter(
-        'editor.BlockEdit',
-        'chsh/with-codemirror-html',
-        replaceHtmlEdit
-    );
+    function modeFor( textarea ) {
+        const label = ( textarea.getAttribute( 'aria-label' ) || '' )
+            .toLowerCase();
+        if ( label === 'css' ) return 'css';
+        if ( label === 'javascript' ) return 'javascript';
+        return 'htmlmixed';
+    }
+
+    function attachEditor( textarea ) {
+        if ( ! textarea || initialized.has( textarea ) ) return;
+        initialized.add( textarea );
+
+        let cm;
+        try {
+            cm = CodeMirror.fromTextArea( textarea, {
+                mode:              modeFor( textarea ),
+                theme:             settingsTheme(),
+                lineNumbers:       true,
+                lineWrapping:      true,
+                indentUnit:        settingsTabSize(),
+                tabSize:           settingsTabSize(),
+                indentWithTabs:    false,
+                matchBrackets:     true,
+                autoCloseBrackets: true,
+                extraKeys: {
+                    Tab: function ( editor ) {
+                        if ( editor.somethingSelected() ) {
+                            editor.indentSelection( 'add' );
+                        } else {
+                            editor.replaceSelection(
+                                ' '.repeat( settingsTabSize() ),
+                                'end'
+                            );
+                        }
+                    },
+                    'Shift-Tab': function ( editor ) {
+                        editor.indentSelection( 'subtract' );
+                    },
+                },
+            } );
+        } catch ( err ) {
+            // eslint-disable-next-line no-console
+            console.error( '[chsh] CodeMirror init failed:', err );
+            return;
+        }
+
+        // Push CodeMirror edits back into the React-controlled <textarea>
+        // so PlainText's onChange fires and the modal's local state updates.
+        const win = textarea.ownerDocument.defaultView || window;
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+            win.HTMLTextAreaElement.prototype,
+            'value'
+        ).set;
+
+        cm.on( 'change', function () {
+            nativeSetter.call( textarea, cm.getValue() );
+            textarea.dispatchEvent( new Event( 'input', { bubbles: true } ) );
+        } );
+
+        // Tab switches and modal mounting can leave CM with a stale layout.
+        cm.on( 'focus', function () {
+            cm.refresh();
+        } );
+        requestAnimationFrame( function () {
+            cm.refresh();
+        } );
+    }
+
+    function scan( root ) {
+        if ( ! root || ! root.querySelectorAll ) return;
+        root.querySelectorAll( SELECTOR ).forEach( attachEditor );
+    }
+
+    wp.domReady( function () {
+        scan( document );
+
+        // The modal mounts on demand (and tabs swap textareas in/out), so
+        // watch for the editor textareas appearing anywhere in the DOM.
+        new MutationObserver( function ( mutations ) {
+            for ( let i = 0; i < mutations.length; i++ ) {
+                const added = mutations[ i ].addedNodes;
+                for ( let j = 0; j < added.length; j++ ) {
+                    const node = added[ j ];
+                    if ( node.nodeType !== 1 ) continue;
+                    if ( node.matches && node.matches( SELECTOR ) ) {
+                        attachEditor( node );
+                    } else {
+                        scan( node );
+                    }
+                }
+            }
+        } ).observe( document.body, { childList: true, subtree: true } );
+    } );
 } )();
