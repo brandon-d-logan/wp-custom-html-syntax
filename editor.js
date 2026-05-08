@@ -67,21 +67,48 @@
         }, { passive: true } );
     }
 
-    function scanBlocks() {
-        // The Custom HTML block wraps its textarea inside an element with
-        // data-type="core/html". .wp-block-html is a fallback for older builds.
+    const SELECTOR =
+        '[data-type="core/html"] textarea, .wp-block-html textarea';
+
+    function scanIn( doc ) {
+        doc.querySelectorAll( SELECTOR ).forEach( attachEditor );
+    }
+
+    const watchedDocs = new WeakSet();
+    function watchDoc( doc ) {
+        if ( ! doc || ! doc.body || watchedDocs.has( doc ) ) return;
+        watchedDocs.add( doc );
+        scanIn( doc );
+        new MutationObserver( function () {
+            scanIn( doc );
+        } ).observe( doc.body, { childList: true, subtree: true } );
+    }
+
+    // Since WP 6.3 the block editor canvas runs inside an iframe
+    // (<iframe name="editor-canvas">), so the textareas live in a different
+    // document from this script. Watch the parent doc *and* the iframe doc.
+    const watchedFrames = new WeakSet();
+    function watchIframes() {
         document
             .querySelectorAll(
-                '[data-type="core/html"] textarea, .wp-block-html textarea'
+                'iframe[name="editor-canvas"], iframe.edit-post-visual-editor__content-area, iframe.editor-canvas__iframe'
             )
-            .forEach( attachEditor );
+            .forEach( function ( iframe ) {
+                if ( watchedFrames.has( iframe ) ) return;
+                watchedFrames.add( iframe );
+
+                const tryWatch = function () {
+                    watchDoc( iframe.contentDocument );
+                };
+                tryWatch();
+                iframe.addEventListener( 'load', tryWatch );
+            } );
     }
 
     wp.domReady( function () {
-        scanBlocks();
-
-        // Watch the editor canvas for newly inserted blocks and tab switches
-        new MutationObserver( scanBlocks ).observe( document.body, {
+        watchDoc( document );
+        watchIframes();
+        new MutationObserver( watchIframes ).observe( document.body, {
             childList: true,
             subtree:   true,
         } );
