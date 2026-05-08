@@ -1,6 +1,6 @@
 # Custom HTML Syntax Highlighter
 
-A WordPress plugin that adds full **CodeMirror syntax highlighting** to the built-in Custom HTML block — using WordPress's own bundled CodeMirror. No CDN, no extra downloads, no external dependencies.
+A WordPress plugin that adds full **CodeMirror syntax highlighting** to the built-in Custom HTML block. It uses WordPress's own bundled CodeMirror library.
 
 ![Comparison of the plain Core Output editor vs the plugin's syntax-highlighted editor with optional dark mode toggle](assets/plugin-output-screenshot.jpg)
 
@@ -10,7 +10,7 @@ A WordPress plugin that adds full **CodeMirror syntax highlighting** to the buil
 
 - **Syntax highlighting** for HTML, CSS, and JavaScript inside every Custom HTML block
 - **Line numbers** and a **fold gutter** for collapsing tags, braces, and comment blocks
-- **Dark mode toggle** in the block toolbar — preference is saved to `localStorage` and synced across open tabs
+- **Dark mode toggle** in the block toolbar. Your preference is saved to `localStorage` and synced across open tabs
 - **Pop-out / expand mode** — promotes the editor into a full canvas overlay so long documents are easy to read and edit; press **Esc** or click the close button to collapse
 - **Auto-closing brackets** and smart Tab / Shift-Tab indentation
 - Block title displayed in the pop-out header (updates live when you rename the block via the inspector)
@@ -48,7 +48,7 @@ Two buttons are added to the Custom HTML block toolbar:
 | Expand icon | Expand the editor into a full-canvas overlay |
 | Moon icon | Toggle dark mode on/off |
 
-Both states persist independently — dark mode across all Custom HTML blocks in the browser, and expand per-block.
+Both states persist independently; dark mode across all Custom HTML blocks in the browser, and expand per-block.
 
 ### Keyboard shortcuts
 
@@ -63,7 +63,7 @@ Both states persist independently — dark mode across all Custom HTML blocks in
 
 ## How it works
 
-The plugin hooks into `enqueue_block_editor_assets` to load a small JS + CSS bundle alongside WordPress's existing `code-editor` package (which already includes `wp-codemirror`). A `MutationObserver` watches for Custom HTML block textareas — both the current inline-textarea layout and the forward-compatible modal layout — and calls `wp.codeEditor.initialize()` on each one. A higher-order component registered via the `editor.BlockEdit` filter injects the dark mode and expand toolbar buttons.
+The plugin hooks into `enqueue_block_editor_assets` to load a small JS + CSS bundle alongside WordPress's existing `code-editor` package (which already includes `wp-codemirror`). A `MutationObserver` watches for Custom HTML block textareas (both the current inline-textarea layout and the forward-compatible modal layout) and calls `wp.codeEditor.initialize()` on each one. A higher-order component registered via the `editor.BlockEdit` filter injects the dark mode and expand toolbar buttons.
 
 Because everything is sourced from WordPress core's own asset bundle, the plugin adds less than **10 KB** of its own JavaScript and CSS.
 
