@@ -1,26 +1,41 @@
 /*
  * Style CodeMirror inside the Custom HTML block.
  *
- * In the inline-textarea version of the block (current WP), CodeMirror's
+ * In the inline-textarea version of the block (pre-7.0), CodeMirror's
  * wrapper is inserted as a sibling of textarea.block-editor-plain-text
  * inside the block wrapper ([data-type="core/html"] / .wp-block-html).
- *
- * In the modal version (Gutenberg trunk), the wrapper sits inside a
- * .block-library-html__modal-tab. Both are styled here.
- *
  * Use a fixed height with internal scrolling so a long document doesn't
  * blow out the editor canvas — matches the prior textarea's visual cap.
+ *
+ * In the modal version (WP 7.0+), the wrapper sits inside
+ * .block-library-html__modal-tab — which WP styles as a flex column at
+ * height: 100% and where the native textarea fills the space with
+ * `flex: 1`. CodeMirror's wrapper isn't flex-sized by default, so without
+ * matching it the editor would collapse to its content (or to whatever
+ * we set explicitly). Mirror the textarea's flex sizing so it fills the
+ * tab panel.
  */
 
 [data-type="core/html"] .CodeMirror,
 .wp-block-html .CodeMirror,
 .block-library-html__modal-tab .CodeMirror {
-    height: 250px;
     font-size: 13px;
     font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
     line-height: 1.65;
     border: 1px solid #949494;
     border-radius: 2px;
+}
+
+[data-type="core/html"] .CodeMirror,
+.wp-block-html .CodeMirror {
+    height: 250px;
+}
+
+.block-library-html__modal-tab .CodeMirror {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
 }
 
 [data-type="core/html"] .CodeMirror-focused,

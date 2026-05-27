@@ -39,24 +39,31 @@
         return;
     }
 
-    // The Custom HTML block currently in WP renders an inline <PlainText>
-    // (textarea.block-editor-plain-text) directly in the block when not in
-    // Preview mode. Source (matches what 6.9 ships):
+    // Pre-7.0 the Custom HTML block rendered an inline <PlainText>
+    // (textarea.block-editor-plain-text) directly inside the block when
+    // not in Preview mode:
     //   https://github.com/WordPress/gutenberg/blob/51437a9/packages/block-library/src/html/edit.js
     //
-    // The trunk-only modal version (Gutenberg #73108, Nov 2025) instead
-    // renders textareas with class `block-library-html__modal-editor`
-    // inside a portal-mounted Modal. We match both so the plugin works
-    // before and after that change lands in core.
-    const SELECTOR = [
-        // Inline textarea inside the block wrapper.
-        '[data-type="core/html"] textarea',
-        '.wp-block-html textarea',
-        // Modal-based editors (forward-compat).
-        'textarea.block-library-html__modal-editor',
-        '.block-library-html__modal-tab textarea',
-        '.block-library-html__modal textarea',
-    ].join( ', ' );
+    // WP 7.0 (Gutenberg #73108) replaced that with a tabbed modal — HTML,
+    // CSS, JS tabs each holding a PlainText editor with class
+    // `block-library-html__modal-editor` inside `.block-library-html__modal`.
+    //
+    // Critically, a `<TabPanel descendant> textarea` selector over-matches
+    // in the new layout: PlainText / textarea-autosize can produce an
+    // additional shadow textarea per editor, so a broad descendant match
+    // ends up wrapping two textareas in each tab — that's the "duplicate
+    // field per tab" symptom in 7.0. On 7.0+ we therefore scope strictly
+    // to the editor textarea's own class. Pre-7.0 keeps the original wide
+    // selector list since the older block doesn't expose that class.
+    const isWp70Plus = !! (
+        window.chshSettings && chshSettings.isWp70Plus
+    );
+    const SELECTOR = isWp70Plus
+        ? 'textarea.block-library-html__modal-editor'
+        : [
+            '[data-type="core/html"] textarea',
+            '.wp-block-html textarea',
+        ].join( ', ' );
     const initialized = new WeakSet();
     const watchedDocs = new WeakSet();
 
@@ -141,6 +148,80 @@
             detail: { enabled: enabled },
         } ) );
     } );
+
+    // WP 7.0 moved Custom HTML editing into a fullscreen Modal that, once
+    // open, overlays the canvas and hides the block toolbar — so the
+    // dark-mode button on the toolbar is unreachable mid-edit. We mirror
+    // that toggle into the modal's header (next to the native fullscreen
+    // button) so it's available from inside the modal too. Pre-7.0 has no
+    // modal, so injection is a no-op there.
+    const MODAL_HEADER_SEL     = '.block-library-html__modal-header';
+    const MODAL_DARK_BTN_CLASS = 'chsh-modal-dark-toggle';
+
+    // Single global sync function (paint-by-query) instead of a listener
+    // per injected button — keeps cleanup trivial when the modal closes
+    // and the button is GC'd along with the rest of the modal DOM.
+    function syncModalDarkButtons() {
+        const dark = getDarkMode();
+        function paint( doc ) {
+            if ( ! doc || ! doc.querySelectorAll ) return;
+            doc.querySelectorAll(
+                '.' + MODAL_DARK_BTN_CLASS
+            ).forEach( function ( btn ) {
+                btn.setAttribute(
+                    'aria-pressed',
+                    dark ? 'true' : 'false'
+                );
+                btn.classList.toggle( 'is-pressed', dark );
+                btn.setAttribute(
+                    'aria-label',
+                    dark
+                        ? 'Switch to light mode'
+                        : 'Switch to dark mode'
+                );
+            } );
+        }
+        paint( document );
+        document.querySelectorAll( 'iframe' ).forEach( function ( f ) {
+            try { paint( f.contentDocument ); } catch ( e ) {}
+        } );
+    }
+
+    function injectModalDarkToggle( header ) {
+        if ( ! header || header.querySelector( '.' + MODAL_DARK_BTN_CLASS ) ) {
+            return;
+        }
+        const doc = header.ownerDocument;
+        const btn = doc.createElement( 'button' );
+        btn.type = 'button';
+        // Mimic the native fullscreen Button's variant="tertiary"
+        // icon-button classes so the toggle inherits modal styling
+        // without us shipping our own CSS for it.
+        btn.className =
+            'components-button has-icon is-tertiary '
+            + MODAL_DARK_BTN_CLASS;
+        btn.innerHTML =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
+            'width="24" height="24" aria-hidden="true" focusable="false">' +
+            '<path fill="currentColor" ' +
+            'd="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>';
+        btn.addEventListener( 'click', function () {
+            setDarkMode( ! getDarkMode() );
+        } );
+
+        // The header is an HStack[justify=space-between] with a left
+        // slot (tab list) and — on non-mobile — a right slot holding
+        // the fullscreen button. Land in the right slot when present;
+        // otherwise create one so flex layout pushes us to the edge.
+        let rightSlot = header.lastElementChild;
+        if ( ! rightSlot || rightSlot === header.firstElementChild ) {
+            rightSlot = doc.createElement( 'div' );
+            header.appendChild( rightSlot );
+        }
+        rightSlot.insertBefore( btn, rightSlot.firstChild );
+
+        syncModalDarkButtons();
+    }
 
     // Pop-out / expanded mode. Toggling adds `chsh-expanded` to the
     // CodeMirror wrapper(s) inside a given block, which CSS turns into a
@@ -430,6 +511,36 @@
     }
     document.addEventListener( 'keydown', escHandler, true );
 
+    // Trap Tab inside the editor. CodeMirror's own extraKeys.Tab fires
+    // and calls preventDefault, but Gutenberg's writing-flow tab nav
+    // listens on an ancestor and moves focus programmatically via
+    // .focus() — which ignores preventDefault. We intercept Tab in the
+    // capture phase at the document level (before it reaches Gutenberg's
+    // bubble-phase listener) when the target is inside a CodeMirror,
+    // stop propagation entirely, and run the indent ourselves.
+    function tabHandler( e ) {
+        if ( e.key !== 'Tab' || e.ctrlKey || e.altKey || e.metaKey ) return;
+        const target = e.target;
+        if ( ! target || typeof target.closest !== 'function' ) return;
+        const wrapper = target.closest( '.CodeMirror' );
+        if ( ! wrapper || ! wrapper.CodeMirror ) return;
+        const cm = wrapper.CodeMirror;
+        e.preventDefault();
+        e.stopPropagation();
+        if ( e.stopImmediatePropagation ) e.stopImmediatePropagation();
+        if ( e.shiftKey ) {
+            cm.indentSelection( 'subtract' );
+        } else if ( cm.somethingSelected() ) {
+            cm.indentSelection( 'add' );
+        } else {
+            cm.replaceSelection(
+                ' '.repeat( settingsTabSize() ),
+                'end'
+            );
+        }
+    }
+    document.addEventListener( 'keydown', tabHandler, true );
+
     function modeFor( textarea ) {
         const label = ( textarea.getAttribute( 'aria-label' ) || '' )
             .toLowerCase();
@@ -455,6 +566,18 @@
         cm.indentWithTabs    = false;
         cm.matchBrackets     = true;
         cm.autoCloseBrackets = true;
+
+        // Disable mode-driven auto-indent. CodeMirror's CSS mode (used by
+        // htmlmixed inside `<style>`) computes indent relative to the
+        // column of the `<style>` tag, which can balloon to 20+ spaces
+        // when the surrounding HTML is itself indented. With smartIndent
+        // off and our own Enter handler (below) that just copies the
+        // previous line's leading whitespace, indentation becomes
+        // predictable and stays at whatever the user typed. electricChars
+        // off prevents typing `}` from triggering a re-indent of the
+        // current line for the same reason.
+        cm.smartIndent   = false;
+        cm.electricChars = false;
 
         // CSSLint / HTMLHint don't understand modern syntax (e.g. the CSS
         // Nesting Module) and produce false positives on valid code. We
@@ -529,20 +652,23 @@
             textarea.dispatchEvent( new Event( 'input', { bubbles: true } ) );
         } );
 
-        // The Tab key would otherwise move focus; make it indent.
+        // Tab/Shift-Tab are handled by a capture-phase document listener
+        // (see tabHandler) so Gutenberg's writing-flow tab navigation
+        // can't steal them — preventDefault alone isn't enough because
+        // Gutenberg moves focus programmatically via .focus(), which
+        // ignores preventDefault. Enter is overridden to just copy the
+        // previous line's leading whitespace; combined with smartIndent
+        // off, this stops the CSS mode from producing 20+ space indents.
         cm.setOption( 'extraKeys', {
-            Tab: function ( editor ) {
+            Enter: function ( editor ) {
                 if ( editor.somethingSelected() ) {
-                    editor.indentSelection( 'add' );
-                } else {
-                    editor.replaceSelection(
-                        ' '.repeat( settingsTabSize() ),
-                        'end'
-                    );
+                    editor.replaceSelection( '\n' );
+                    return;
                 }
-            },
-            'Shift-Tab': function ( editor ) {
-                editor.indentSelection( 'subtract' );
+                const cursor   = editor.getCursor();
+                const lineText = editor.getLine( cursor.line ) || '';
+                const leading  = ( lineText.match( /^[ \t]*/ ) || [ '' ] )[ 0 ];
+                editor.replaceSelection( '\n' + leading );
             },
             // Toggle the fold containing the cursor — the conventional
             // CodeMirror foldcode keybinding.
@@ -565,6 +691,10 @@
     function scan( root ) {
         if ( ! root || ! root.querySelectorAll ) return;
         root.querySelectorAll( SELECTOR ).forEach( attachEditor );
+        if ( isWp70Plus ) {
+            root.querySelectorAll( MODAL_HEADER_SEL )
+                .forEach( injectModalDarkToggle );
+        }
     }
 
     function watchDoc( doc ) {
@@ -574,6 +704,7 @@
         scan( doc );
         if ( doc !== document ) {
             doc.addEventListener( 'keydown', escHandler, true );
+            doc.addEventListener( 'keydown', tabHandler, true );
         }
 
         const Observer =
@@ -586,15 +717,24 @@
                 for ( let j = 0; j < added.length; j++ ) {
                     const node = added[ j ];
                     if ( node.nodeType !== 1 ) continue;
-                    if ( node.matches && node.matches( SELECTOR ) ) {
-                        attachEditor( node );
-                    } else {
-                        scan( node );
+                    if ( node.matches ) {
+                        if ( node.matches( SELECTOR ) ) {
+                            attachEditor( node );
+                        }
+                        if ( isWp70Plus && node.matches( MODAL_HEADER_SEL ) ) {
+                            injectModalDarkToggle( node );
+                        }
                     }
+                    scan( node );
                 }
             }
         } ).observe( doc.body, { childList: true, subtree: true } );
     }
+
+    // Keep injected modal-header toggles in sync with global dark-mode
+    // state — listening on DARK_EVENT covers both the toolbar-button
+    // path (setDarkMode) and the cross-tab path (storage event handler).
+    window.addEventListener( DARK_EVENT, syncModalDarkButtons );
 
     function watchIframes() {
         // The Modal renders to a portal; in some setups the portal target is
@@ -756,6 +896,27 @@
                         }
                     }, [ props.clientId, blockName ] );
 
+                    // WP 7.0's modal already provides its own fullscreen
+                    // toggle, and our pop-out finds editors via
+                    // `[data-block="<clientId>"] .CodeMirror` — which won't
+                    // reach the portal-mounted modal anyway. Drop the
+                    // expand button on 7.0+ so the toolbar doesn't show a
+                    // control that has nothing to act on.
+                    const expandButton = isWp70Plus ? null : el( ToolbarButton, {
+                        icon:      expanded ? collapseIcon : expandIcon,
+                        label:     expanded
+                            ? __( 'Collapse editor', 'chsh' )
+                            : __( 'Expand editor', 'chsh' ),
+                        isPressed: expanded,
+                        onClick:   function () {
+                            setExpanded(
+                                props.clientId,
+                                ! expanded,
+                                blockName
+                            );
+                        },
+                    } );
+
                     return el(
                         Fragment,
                         null,
@@ -766,20 +927,7 @@
                             el(
                                 ToolbarGroup,
                                 null,
-                                el( ToolbarButton, {
-                                    icon:      expanded ? collapseIcon : expandIcon,
-                                    label:     expanded
-                                        ? __( 'Collapse editor', 'chsh' )
-                                        : __( 'Expand editor', 'chsh' ),
-                                    isPressed: expanded,
-                                    onClick:   function () {
-                                        setExpanded(
-                                            props.clientId,
-                                            ! expanded,
-                                            blockName
-                                        );
-                                    },
-                                } ),
+                                expandButton,
                                 el( ToolbarButton, {
                                     icon:      moonIcon,
                                     label:     dark
