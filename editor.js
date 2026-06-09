@@ -158,6 +158,75 @@
     const MODAL_HEADER_SEL     = '.block-library-html__modal-header';
     const MODAL_DARK_BTN_CLASS = 'chsh-modal-dark-toggle';
 
+    // WP 7.0's modal splits its body between the code editor
+    // (.block-library-html__modal-content) and a live preview pane
+    // (.block-library-html__preview), each `flex: 1`, so the code never
+    // gets more than half the width — even in the modal's own fullscreen
+    // mode. We inject a second header button that hides the preview pane
+    // (via the `chsh-hide-preview` class on the modal, see editor.css);
+    // with the preview gone the editor's `flex: 1` lets it fill the modal
+    // edge to edge. The preference is persisted like dark mode so it
+    // sticks across blocks and sessions.
+    const MODAL_SEL                = '.block-library-html__modal';
+    const MODAL_PREVIEW_BTN_CLASS  = 'chsh-modal-preview-toggle';
+    const HIDE_PREVIEW_CLASS       = 'chsh-hide-preview';
+    const PREVIEW_STORAGE_KEY      = 'chsh:hidePreview';
+
+    function getHidePreview() {
+        try {
+            return window.localStorage.getItem( PREVIEW_STORAGE_KEY ) === '1';
+        } catch ( e ) {
+            return false;
+        }
+    }
+
+    // Paint-by-query, mirroring syncModalDarkButtons: toggle the modal
+    // class that drives the CSS and keep every injected button's pressed
+    // state in sync, across the top doc and any iframe portals. CodeMirror
+    // caches its viewport width, so nudge a refresh once the editor column
+    // has resized.
+    function applyHidePreview() {
+        const hide = getHidePreview();
+        function paint( doc ) {
+            if ( ! doc || ! doc.querySelectorAll ) return;
+            doc.querySelectorAll( MODAL_SEL ).forEach( function ( modal ) {
+                modal.classList.toggle( HIDE_PREVIEW_CLASS, hide );
+            } );
+            doc.querySelectorAll(
+                '.' + MODAL_PREVIEW_BTN_CLASS
+            ).forEach( function ( btn ) {
+                btn.setAttribute( 'aria-pressed', hide ? 'true' : 'false' );
+                btn.classList.toggle( 'is-pressed', hide );
+                btn.setAttribute(
+                    'aria-label',
+                    hide ? 'Show preview' : 'Hide preview'
+                );
+            } );
+        }
+        paint( document );
+        document.querySelectorAll( 'iframe' ).forEach( function ( f ) {
+            try { paint( f.contentDocument ); } catch ( e ) {}
+        } );
+        requestAnimationFrame( function () {
+            for ( let i = cmInstances.length - 1; i >= 0; i-- ) {
+                try { cmInstances[ i ].refresh(); } catch ( e ) {}
+            }
+        } );
+    }
+
+    function setHidePreview( hide ) {
+        try {
+            window.localStorage.setItem(
+                PREVIEW_STORAGE_KEY, hide ? '1' : '0'
+            );
+        } catch ( e ) {}
+        applyHidePreview();
+    }
+
+    window.addEventListener( 'storage', function ( e ) {
+        if ( e.key === PREVIEW_STORAGE_KEY ) applyHidePreview();
+    } );
+
     // Single global sync function (paint-by-query) instead of a listener
     // per injected button — keeps cleanup trivial when the modal closes
     // and the button is GC'd along with the rest of the modal DOM.
@@ -221,6 +290,49 @@
         rightSlot.insertBefore( btn, rightSlot.firstChild );
 
         syncModalDarkButtons();
+    }
+
+    function injectModalPreviewToggle( header ) {
+        if (
+            ! header ||
+            header.querySelector( '.' + MODAL_PREVIEW_BTN_CLASS )
+        ) {
+            return;
+        }
+        const doc = header.ownerDocument;
+        const btn = doc.createElement( 'button' );
+        btn.type = 'button';
+        btn.className =
+            'components-button has-icon is-tertiary '
+            + MODAL_PREVIEW_BTN_CLASS;
+        // A panel split with the right pane shaded — the conventional
+        // "toggle the side preview" affordance.
+        btn.innerHTML =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
+            'width="24" height="24" aria-hidden="true" focusable="false">' +
+            '<rect x="4" y="5" width="16" height="14" rx="1" fill="none" ' +
+            'stroke="currentColor" stroke-width="1.6"/>' +
+            '<rect x="14" y="5" width="6" height="14" ' +
+            'fill="currentColor" opacity="0.7"/></svg>';
+        btn.addEventListener( 'click', function () {
+            setHidePreview( ! getHidePreview() );
+        } );
+
+        // Match injectModalDarkToggle: land in the header's right slot so
+        // both toggles sit beside the native fullscreen button.
+        let rightSlot = header.lastElementChild;
+        if ( ! rightSlot || rightSlot === header.firstElementChild ) {
+            rightSlot = doc.createElement( 'div' );
+            header.appendChild( rightSlot );
+        }
+        rightSlot.insertBefore( btn, rightSlot.firstChild );
+
+        applyHidePreview();
+    }
+
+    function injectModalHeaderButtons( header ) {
+        injectModalDarkToggle( header );
+        injectModalPreviewToggle( header );
     }
 
     // Pop-out / expanded mode. Toggling adds `chsh-expanded` to the
@@ -693,7 +805,48 @@
         root.querySelectorAll( SELECTOR ).forEach( attachEditor );
         if ( isWp70Plus ) {
             root.querySelectorAll( MODAL_HEADER_SEL )
-                .forEach( injectModalDarkToggle );
+                .forEach( injectModalHeaderButtons );
+        }
+    }
+
+    // WP 7.0's modal renders each HTML/CSS/JS tab's PlainText into a
+    // persistent modal body and unmounts it on tab switch. React only
+    // removes the <textarea> *it* created; the `.CodeMirror` wrapper that
+    // fromTextArea() inserted as a sibling is not tracked by React, so it
+    // is left orphaned in the modal body. Returning to the tab mounts a
+    // fresh textarea (new element, not in our `initialized` set), we attach
+    // a new CodeMirror, and the stale wrapper remains beneath it — that's
+    // the "editors stack on every tab switch" symptom. Sweep on each
+    // mutation batch and tear down any instance whose backing textarea has
+    // left the DOM (or whose wrapper is already gone), keeping cmInstances
+    // and the live DOM in sync.
+    function cleanupDetachedEditors() {
+        for ( let i = cmInstances.length - 1; i >= 0; i-- ) {
+            const cm = cmInstances[ i ];
+            let wrapper = null;
+            let ta      = null;
+            try { wrapper = cm.getWrapperElement(); } catch ( e ) {}
+            try { ta = cm.getTextArea(); } catch ( e ) {}
+
+            if ( ! wrapper || ! wrapper.isConnected ) {
+                // CodeMirror's own DOM is already gone; just forget it.
+                cmInstances.splice( i, 1 );
+                continue;
+            }
+            if ( ! ta || ! ta.isConnected ) {
+                // Backing textarea was unmounted but the wrapper lingers.
+                // toTextArea() removes the wrapper and restores the (now
+                // detached, harmless) textarea; fall back to a manual
+                // detach if it throws.
+                try {
+                    cm.toTextArea();
+                } catch ( e ) {
+                    if ( wrapper.parentNode ) {
+                        wrapper.parentNode.removeChild( wrapper );
+                    }
+                }
+                cmInstances.splice( i, 1 );
+            }
         }
     }
 
@@ -712,6 +865,10 @@
             window.MutationObserver;
 
         new Observer( function ( mutations ) {
+            // A tab switch removes the old tab's textarea (and may add the
+            // new tab's in the same batch). Reap orphaned wrappers first so
+            // returning to a tab never stacks a second editor.
+            cleanupDetachedEditors();
             for ( let i = 0; i < mutations.length; i++ ) {
                 const added = mutations[ i ].addedNodes;
                 for ( let j = 0; j < added.length; j++ ) {
@@ -722,7 +879,7 @@
                             attachEditor( node );
                         }
                         if ( isWp70Plus && node.matches( MODAL_HEADER_SEL ) ) {
-                            injectModalDarkToggle( node );
+                            injectModalHeaderButtons( node );
                         }
                     }
                     scan( node );

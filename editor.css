@@ -46,6 +46,19 @@
     box-shadow: 0 0 0 1px #007cba;
 }
 
+/*
+ * Hide-preview mode (WP 7.0+). The modal body is a flex row split between
+ * the code editor (.block-library-html__modal-content) and a live preview
+ * (.block-library-html__preview), both `flex: 1`, so the code is capped at
+ * ~half the width even in the modal's fullscreen mode. The header toggle
+ * injected by editor.js (injectModalPreviewToggle) adds `chsh-hide-preview`
+ * to the modal; dropping the preview out of the flow lets the editor's
+ * `flex: 1` grow it edge to edge.
+ */
+.block-library-html__modal.chsh-hide-preview .block-library-html__preview {
+    display: none;
+}
+
 [data-type="core/html"] .CodeMirror-gutters,
 .wp-block-html .CodeMirror-gutters,
 .block-library-html__modal-tab .CodeMirror-gutters {
