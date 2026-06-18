@@ -163,14 +163,52 @@
     // (.block-library-html__preview), each `flex: 1`, so the code never
     // gets more than half the width — even in the modal's own fullscreen
     // mode. We inject a second header button that hides the preview pane
-    // (via the `chsh-hide-preview` class on the modal, see editor.css);
+    // (via the `chsh-hide-preview` class on <body>, see editor.css);
     // with the preview gone the editor's `flex: 1` lets it fill the modal
     // edge to edge. The preference is persisted like dark mode so it
     // sticks across blocks and sessions.
     const MODAL_SEL                = '.block-library-html__modal';
+    const MODAL_CONTENT_SEL        = '.block-library-html__modal-content';
     const MODAL_PREVIEW_BTN_CLASS  = 'chsh-modal-preview-toggle';
     const HIDE_PREVIEW_CLASS       = 'chsh-hide-preview';
     const PREVIEW_STORAGE_KEY      = 'chsh:hidePreview';
+
+    // Click-outside-to-close. WP 7.0's modal sets
+    // shouldCloseOnClickOutside={false}, so clicking the dimmer that
+    // surrounds the (non-fullscreen) frame does nothing. Re-enable it: a
+    // click on the overlay itself closes the editor. The dimmer is a large,
+    // empty region the cursor never works in, so an accidental close is
+    // implausible.
+    //
+    // The modal stages edits locally and only commits them when the
+    // footer's "Update" (primary) button runs; onRequestClose — what Cancel
+    // and Esc invoke — DISCARDS them. We deliberately mirror Cancel: a
+    // dimmer click discards, matching the user's flow of always clicking
+    // "Update" explicitly after meaningful edits. We click the footer's
+    // Cancel (tertiary) button rather than dispatching Esc so the close
+    // path is identical to the native control.
+    const MODAL_OVERLAY_CLASS  = 'components-modal__screen-overlay';
+    const MODAL_OVERLAY_SEL    = '.' + MODAL_OVERLAY_CLASS;
+    const MODAL_CANCEL_BTN_SEL =
+        '.block-library-html__modal-footer .components-button.is-tertiary';
+    const overlaysWired = new WeakSet();
+
+    function wireOverlayDismiss( header ) {
+        const modal = header && header.closest
+            ? header.closest( MODAL_SEL )
+            : null;
+        if ( ! modal || ! modal.closest ) return;
+        const overlay = modal.closest( MODAL_OVERLAY_SEL );
+        if ( ! overlay || overlaysWired.has( overlay ) ) return;
+        overlaysWired.add( overlay );
+        overlay.addEventListener( 'click', function ( e ) {
+            // Only a click landing on the dimmer itself closes — clicks
+            // inside the frame bubble up with a deeper target.
+            if ( e.target !== overlay ) return;
+            const cancel = overlay.querySelector( MODAL_CANCEL_BTN_SEL );
+            if ( cancel ) cancel.click();
+        } );
+    }
 
     function getHidePreview() {
         try {
@@ -180,18 +218,26 @@
         }
     }
 
-    // Paint-by-query, mirroring syncModalDarkButtons: toggle the modal
-    // class that drives the CSS and keep every injected button's pressed
-    // state in sync, across the top doc and any iframe portals. CodeMirror
-    // caches its viewport width, so nudge a refresh once the editor column
-    // has resized.
+    // Paint-by-query, mirroring syncModalDarkButtons: toggle the CSS flag
+    // and keep every injected button's pressed state in sync, across the
+    // top doc and any iframe portals. CodeMirror caches its viewport width,
+    // so nudge a refresh once the editor column has resized.
+    //
+    // The flag goes on each document's <body>, NOT on the modal element.
+    // `.block-library-html__modal` is the React-rendered Modal frame; when
+    // the user toggles the native fullscreen button, React re-renders and
+    // rewrites that element's className (adding `is-full-screen`), which
+    // strips any class we added imperatively — the preview pane snaps back
+    // and the editor returns to half width until the next manual toggle.
+    // <body> sits outside the editor's React root, so React never rewrites
+    // it and the full-width state survives a fullscreen toggle.
     function applyHidePreview() {
         const hide = getHidePreview();
         function paint( doc ) {
             if ( ! doc || ! doc.querySelectorAll ) return;
-            doc.querySelectorAll( MODAL_SEL ).forEach( function ( modal ) {
-                modal.classList.toggle( HIDE_PREVIEW_CLASS, hide );
-            } );
+            if ( doc.body ) {
+                doc.body.classList.toggle( HIDE_PREVIEW_CLASS, hide );
+            }
             doc.querySelectorAll(
                 '.' + MODAL_PREVIEW_BTN_CLASS
             ).forEach( function ( btn ) {
@@ -330,9 +376,51 @@
         applyHidePreview();
     }
 
+    // CodeMirror 5 caches its viewport width and does NOT reflow when its
+    // container resizes — there is no built-in resize handling. Several
+    // things resize the editor without touching its DOM, leaving the code
+    // boxed at the old (usually half) width until something calls refresh():
+    //   - the modal's native full-size button,
+    //   - hiding the preview pane (our full-width toggle): the editor column
+    //     `.block-library-html__modal-content` is `flex: 1` and widens to
+    //     fill the space the now-`display:none` preview vacated,
+    //   - the sidebar/window resizing.
+    //
+    // We must observe the editor *column*, not the modal: hiding the preview
+    // changes only the column's width, never the modal's, so a modal-level
+    // observer never fires for it — which is exactly why the persisted
+    // full-width state failed to take on open and only a manual toggle (which
+    // happens to refresh) fixed it. The column box changes for fullscreen too
+    // (it's a flex child of the modal), so one observer here covers every
+    // case. refresh() doesn't alter the column's own size, so no resize loop.
+    // The WeakSet prevents double-observing and lets the observer be collected
+    // when the modal is torn down.
+    const observedColumns = new WeakSet();
+
+    function watchModalResize( header ) {
+        if ( typeof window.ResizeObserver !== 'function' || ! header ) return;
+        const modal = header.closest ? header.closest( MODAL_SEL ) : null;
+        const column = modal
+            ? modal.querySelector( MODAL_CONTENT_SEL )
+            : null;
+        const target = column || modal;
+        if ( ! target || observedColumns.has( target ) ) return;
+        observedColumns.add( target );
+        const ro = new window.ResizeObserver( function () {
+            requestAnimationFrame( function () {
+                for ( let i = cmInstances.length - 1; i >= 0; i-- ) {
+                    try { cmInstances[ i ].refresh(); } catch ( e ) {}
+                }
+            } );
+        } );
+        ro.observe( target );
+    }
+
     function injectModalHeaderButtons( header ) {
         injectModalDarkToggle( header );
         injectModalPreviewToggle( header );
+        watchModalResize( header );
+        wireOverlayDismiss( header );
     }
 
     // Pop-out / expanded mode. Toggling adds `chsh-expanded` to the
@@ -798,6 +886,20 @@
         requestAnimationFrame( function () {
             cm.refresh();
         } );
+
+        // Re-assert the persisted hide-preview ("full width") state now
+        // that this instance is registered. On a fresh modal open, the
+        // header's injectModalPreviewToggle() already ran applyHidePreview()
+        // — but the tab's <textarea> is mounted in a later React commit, so
+        // this editor attaches *after* that refresh fired and never gets the
+        // post-hide resize. The result: the toggle reads as pressed but the
+        // editor still renders at the preview-split (half) width until the
+        // user toggles it off and on. Calling applyHidePreview() here
+        // re-applies the modal class and schedules a refresh that includes
+        // this instance, so the saved full-width state takes effect on open.
+        if ( isWp70Plus ) {
+            applyHidePreview();
+        }
     }
 
     function scan( root ) {

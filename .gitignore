@@ -1,0 +1,6 @@
+# Hidden folders/files
+.*
+!.gitignore
+
+# Build artifacts
+*.zip

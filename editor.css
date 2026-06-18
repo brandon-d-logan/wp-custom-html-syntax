@@ -38,6 +38,42 @@
     min-height: 0;
 }
 
+/*
+ * A long line used to blow the whole modal wider than the viewport,
+ * dragging the footer (Cancel / Update) off-screen behind a window-level
+ * horizontal scrollbar. Root cause is the flexbox `min-width: auto`
+ * default: the modal body is a flex row and the code column refused to
+ * shrink below its longest line — and with no definite width, CodeMirror's
+ * line-wrapping (enabled in editor.js) had nothing finite to wrap against,
+ * so it grew to the content instead. `min-width: 0` lets the column shrink
+ * to the space available, which keeps the modal inside the viewport and
+ * gives CodeMirror a finite width to wrap at.
+ */
+.block-library-html__modal-content,
+.block-library-html__modal-tab {
+    min-width: 0;
+}
+
+/*
+ * Force-break unbreakable tokens. CodeMirror's line wrapping only breaks
+ * at normal word boundaries (whitespace), so a long run with no break
+ * opportunities — a data: URI in a CSS background, a minified blob, a long
+ * query string — never wraps and pushes the editor (and with it the modal
+ * footer) past the viewport edge. Allowing the browser to break such runs
+ * at any character keeps wrapping working even for these lines. CodeMirror
+ * re-measures rendered glyph positions, so the extra break points don't
+ * disturb cursor placement.
+ */
+[data-type="core/html"] .CodeMirror pre.CodeMirror-line,
+[data-type="core/html"] .CodeMirror pre.CodeMirror-line-like,
+.wp-block-html .CodeMirror pre.CodeMirror-line,
+.wp-block-html .CodeMirror pre.CodeMirror-line-like,
+.block-library-html__modal-tab .CodeMirror pre.CodeMirror-line,
+.block-library-html__modal-tab .CodeMirror pre.CodeMirror-line-like {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
 [data-type="core/html"] .CodeMirror-focused,
 .wp-block-html .CodeMirror-focused,
 .block-library-html__modal-tab .CodeMirror-focused {
@@ -52,10 +88,16 @@
  * (.block-library-html__preview), both `flex: 1`, so the code is capped at
  * ~half the width even in the modal's fullscreen mode. The header toggle
  * injected by editor.js (injectModalPreviewToggle) adds `chsh-hide-preview`
- * to the modal; dropping the preview out of the flow lets the editor's
- * `flex: 1` grow it edge to edge.
+ * to the document <body>; dropping the preview out of the flow lets the
+ * editor's `flex: 1` grow it edge to edge.
+ *
+ * The marker lives on <body>, NOT on `.block-library-html__modal`: that
+ * element is the React-rendered Modal frame, and toggling fullscreen makes
+ * React rewrite its className (adding `is-full-screen`), which wipes any
+ * class we added imperatively. <body> is outside the editor's React root,
+ * so React never rewrites it and our flag survives a fullscreen toggle.
  */
-.block-library-html__modal.chsh-hide-preview .block-library-html__preview {
+body.chsh-hide-preview .block-library-html__preview {
     display: none;
 }
 
