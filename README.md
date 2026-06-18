@@ -10,6 +10,7 @@ A WordPress plugin that adds full **CodeMirror syntax highlighting** to the buil
 
 - **Syntax highlighting** for HTML, CSS, and JavaScript inside every Custom HTML block
 - **Line numbers** and a **fold gutter** for collapsing tags, braces, and comment blocks
+- **Find/Replace Functionality** with options for exact match and regex 
 - **Dark mode toggle** in the block toolbar. Your preference is saved to `localStorage` and synced across open tabs
 - **Pop-out / expand mode** — promotes the editor into a full canvas overlay so long documents are easy to read and edit; press **Esc** or click the close button to collapse
 - **Auto-closing brackets** and smart Tab / Shift-Tab indentation
