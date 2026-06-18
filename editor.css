@@ -325,3 +325,202 @@ body.chsh-hide-preview .block-library-html__preview {
 .chsh-expand-header.chsh-expand-header--dark .chsh-expand-header__close:hover {
     background: rgba( 255, 255, 255, 0.1 );
 }
+
+/*
+ * Persistent find / replace panel — see editor.js → openSearchPanel().
+ * It replaces CodeMirror's transient search dialog with a panel that
+ * stays open (match counter, prev/next, a collapsible replace row, and
+ * match-case / regex toggles).
+ *
+ * The panel is appended inside the .CodeMirror wrapper (which CodeMirror
+ * sets to position: relative, same anchor the bundled dialog addon uses),
+ * so it floats at the editor's top-right and survives scrolling because it
+ * sits in the wrapper, not the scroller.
+ */
+.chsh-search-panel {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 7;
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 6px;
+    background: #f0f0f1;
+    border: 1px solid #949494;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba( 0, 0, 0, 0.18 );
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+    box-sizing: border-box;
+}
+
+.chsh-search-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.chsh-search-row {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+/* Replace row is hidden until the chevron toggle reveals it. */
+.chsh-search-row--replace {
+    display: none;
+}
+
+.chsh-search-panel.chsh-with-replace .chsh-search-row--replace {
+    display: flex;
+}
+
+.chsh-search-input,
+.chsh-search-replace-input {
+    width: 180px;
+    height: 26px;
+    box-sizing: border-box;
+    padding: 0 6px;
+    font-size: 12px;
+    border: 1px solid #8c8f94;
+    border-radius: 2px;
+    background: #fff;
+    color: #1e1e1e;
+}
+
+.chsh-search-input:focus,
+.chsh-search-replace-input:focus {
+    outline: none;
+    border-color: #007cba;
+    box-shadow: 0 0 0 1px #007cba;
+}
+
+/* Flagged when a regex pattern fails to compile. */
+.chsh-search-input.chsh-search-input--error {
+    border-color: #d63638;
+    box-shadow: 0 0 0 1px #d63638;
+}
+
+.chsh-search-count {
+    min-width: 56px;
+    padding: 0 2px;
+    font-size: 11px;
+    color: #646970;
+    text-align: center;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.chsh-search-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 26px;
+    min-width: 26px;
+    padding: 0 4px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #1e1e1e;
+    border-radius: 2px;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.chsh-search-button:hover {
+    background: rgba( 0, 0, 0, 0.08 );
+}
+
+.chsh-search-button:focus {
+    outline: 2px solid #007cba;
+    outline-offset: -2px;
+}
+
+.chsh-search-button.is-pressed {
+    background: #007cba;
+    color: #fff;
+}
+
+.chsh-search-opt {
+    font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+    font-weight: 600;
+}
+
+.chsh-search-act {
+    border-color: #8c8f94;
+    padding: 0 10px;
+}
+
+.chsh-search-toggle {
+    align-self: center;
+}
+
+.chsh-search-toggle svg {
+    transition: transform 0.12s ease;
+}
+
+.chsh-search-panel.chsh-with-replace .chsh-search-toggle svg {
+    transform: rotate( 90deg );
+}
+
+/*
+ * Match highlighting. The overlay paints every match (cm-chsh-search);
+ * the active match is marked on top of it (cm-chsh-search-current). The
+ * current rule is listed after the all-matches rule so it wins the
+ * equal-specificity cascade where the two classes land on the same span.
+ */
+.CodeMirror .cm-chsh-search {
+    background: rgba( 250, 200, 40, 0.4 );
+}
+
+.CodeMirror .cm-chsh-search-current {
+    background: #f6993f;
+    color: #000;
+}
+
+/* Dark-theme variants. The wrapper carries cm-s-chsh-dark, so the panel
+ * (a wrapper child) and the in-editor highlights both pick these up. */
+.cm-s-chsh-dark .chsh-search-panel {
+    background: #2d2d2d;
+    border-color: #3c3c3c;
+    color: #d4d4d4;
+    box-shadow: 0 2px 8px rgba( 0, 0, 0, 0.5 );
+}
+
+.cm-s-chsh-dark .chsh-search-input,
+.cm-s-chsh-dark .chsh-search-replace-input {
+    background: #1e1e1e;
+    border-color: #3c3c3c;
+    color: #d4d4d4;
+}
+
+.cm-s-chsh-dark .chsh-search-count {
+    color: #a0a0a0;
+}
+
+.cm-s-chsh-dark .chsh-search-button {
+    color: #d4d4d4;
+}
+
+.cm-s-chsh-dark .chsh-search-button:hover {
+    background: rgba( 255, 255, 255, 0.1 );
+}
+
+.cm-s-chsh-dark .chsh-search-button.is-pressed {
+    background: #0a84ff;
+    color: #fff;
+}
+
+.cm-s-chsh-dark .chsh-search-act {
+    border-color: #555;
+}
+
+.CodeMirror.cm-s-chsh-dark .cm-chsh-search {
+    background: rgba( 255, 213, 79, 0.28 );
+}
+
+.CodeMirror.cm-s-chsh-dark .cm-chsh-search-current {
+    background: #bb7a32;
+    color: #fff;
+}

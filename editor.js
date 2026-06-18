@@ -80,6 +80,7 @@
     const DARK_EVENT   = 'chsh:darkmode-changed';
     const EXPAND_EVENT = 'chsh:expand-changed';
     const EXPANDED_CLASS = 'chsh-expanded';
+    const SEARCH_PANEL_CLASS = 'chsh-search-panel';
     const HEADER_CLASS   = 'chsh-expand-header';
     const HEADER_DARK_CLASS = 'chsh-expand-header--dark';
     const HEADER_HEIGHT  = 36;
@@ -208,6 +209,61 @@
             const cancel = overlay.querySelector( MODAL_CANCEL_BTN_SEL );
             if ( cancel ) cancel.click();
         } );
+    }
+
+    // Esc-to-cancel from inside the code editor (WP 7.0 modal).
+    //
+    // CodeMirror owns the Escape keydown: with no selection the keystroke
+    // bubbles up and the Modal's onRequestClose fires, discarding edits
+    // instantly; with a selection CM collapses it and swallows the key.
+    // That makes a single Esc both inconsistent and dangerous — one stray
+    // tap meant to "get out of" selected text can throw away unsaved work.
+    // We bind Esc ourselves (see attachEditor's extraKeys) so it never
+    // reaches the Modal on its own, collapse any selection on the first
+    // press, and require a *second* Esc within a short window to actually
+    // trigger Cancel. We click the footer Cancel button so the close path
+    // is identical to the native control (and to wireOverlayDismiss).
+    const ESC_CLOSE_WINDOW_MS = 2000;
+    let modalEscArmedAt = 0;
+
+    function modalCancelButton( el ) {
+        const modal = el && el.closest ? el.closest( MODAL_SEL ) : null;
+        return modal ? modal.querySelector( MODAL_CANCEL_BTN_SEL ) : null;
+    }
+
+    function handleEditorEsc( editor ) {
+        const CM   = window.wp && window.wp.CodeMirror;
+        const PASS = CM ? CM.Pass : undefined;
+        const cancel = modalCancelButton( editor.getWrapperElement() );
+        // Not inside a closable modal (pre-7.0 inline editor or the
+        // pop-out overlay): defer to CodeMirror's default Esc, which in
+        // turn lets the pop-out's own document-level Esc handler run.
+        if ( ! cancel ) return PASS;
+
+        // An open find/replace panel claims Esc to close itself first.
+        const s = editor._chshSearch;
+        if ( s && s.panel ) {
+            closeSearchPanel( editor );
+            modalEscArmedAt = 0;
+            return;
+        }
+
+        // First press collapses any selection (the "get out of selected
+        // text" gesture). It must never close on its own — only arm.
+        if ( editor.somethingSelected() ) {
+            editor.setCursor( editor.getCursor() );
+        }
+
+        const now = Date.now();
+        if (
+            modalEscArmedAt &&
+            now - modalEscArmedAt <= ESC_CLOSE_WINDOW_MS
+        ) {
+            modalEscArmedAt = 0;
+            cancel.click();
+            return;
+        }
+        modalEscArmedAt = now;
     }
 
     function getHidePreview() {
@@ -704,7 +760,15 @@
     // enough for most setups; for the iframe canvas we also attach to each
     // iframe document we discover via watchDoc().
     function escHandler( e ) {
-        if ( e.key !== 'Escape' || expandedBlocks.size === 0 ) return;
+        if ( e.key !== 'Escape' ) return;
+        // The search panel lives inside the .CodeMirror wrapper; let its
+        // own Esc handler (which closes the panel) win instead of
+        // collapsing the pop-out out from under an open find box.
+        if (
+            e.target && e.target.closest &&
+            e.target.closest( '.' + SEARCH_PANEL_CLASS )
+        ) return;
+        if ( expandedBlocks.size === 0 ) return;
         const ids = Array.from( expandedBlocks );
         ids.forEach( function ( id ) { setExpanded( id, false ); } );
         e.stopPropagation();
@@ -722,6 +786,10 @@
         if ( e.key !== 'Tab' || e.ctrlKey || e.altKey || e.metaKey ) return;
         const target = e.target;
         if ( ! target || typeof target.closest !== 'function' ) return;
+        // Tab should move between the search panel's own fields, not get
+        // captured as a CodeMirror indent — the panel is nested inside the
+        // .CodeMirror wrapper, so skip it before the wrapper match below.
+        if ( target.closest( '.' + SEARCH_PANEL_CLASS ) ) return;
         const wrapper = target.closest( '.CodeMirror' );
         if ( ! wrapper || ! wrapper.CodeMirror ) return;
         const cm = wrapper.CodeMirror;
@@ -740,6 +808,507 @@
         }
     }
     document.addEventListener( 'keydown', tabHandler, true );
+
+    // ---------------------------------------------------------------------
+    // Persistent find / replace panel.
+    //
+    // CodeMirror 5's bundled `search` addon (what WP wires to Ctrl-F) is
+    // dialog-based: it prompts once, jumps to the first match, then closes,
+    // leaving no way to page through results or replace. We replace it with
+    // a panel that stays open — match counter, prev/next, a collapsible
+    // replace row, and match-case / regex toggles — i.e. the standard
+    // code-editor find experience.
+    //
+    // Matching is done over cm.getValue() with a RegExp and mapped back to
+    // editor positions via posFromIndex(), so it doesn't depend on which
+    // search addons WP happens to bundle. All matches are highlighted with
+    // an overlay (`cm-chsh-search`); the active one is marked separately
+    // (`cm-chsh-search-current`) and kept in view.
+    // ---------------------------------------------------------------------
+
+    const SEARCH_ICON = function ( path ) {
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
+            'width="16" height="16" aria-hidden="true" focusable="false">' +
+            '<path fill="none" stroke="currentColor" stroke-width="2.2" ' +
+            'stroke-linecap="round" stroke-linejoin="round" d="' + path +
+            '"/></svg>';
+    };
+    const SEARCH_CHEVRON = SEARCH_ICON( 'M9 6l6 6-6 6' );
+    const SEARCH_UP      = SEARCH_ICON( 'M6 14l6-6 6 6' );
+    const SEARCH_DOWN    = SEARCH_ICON( 'M6 10l6 6 6-6' );
+    const SEARCH_X       = SEARCH_ICON( 'M6 6l12 12M18 6L6 18' );
+
+    function getSearchState( cm ) {
+        if ( ! cm._chshSearch ) {
+            cm._chshSearch = {
+                panel: null, input: null, replaceInput: null, countEl: null,
+                query: '', replaceValue: '',
+                caseSensitive: false, useRegex: false,
+                matches: [], currentIndex: -1,
+                overlay: null, currentMark: null,
+                anchor: 0, replacing: false, changeHandler: null,
+            };
+        }
+        return cm._chshSearch;
+    }
+
+    // Build the active query as a global RegExp. Literal searches get their
+    // special characters escaped; regex searches use the raw input and
+    // return null when the pattern doesn't compile (so the UI can flag it).
+    function buildSearchRegex( s ) {
+        if ( ! s.query ) return null;
+        const flags  = 'g' + ( s.caseSensitive ? '' : 'i' );
+        const source = s.useRegex
+            ? s.query
+            : s.query.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+        try {
+            return new RegExp( source, flags );
+        } catch ( e ) {
+            return null;
+        }
+    }
+
+    function computeSearchMatches( cm, re ) {
+        const text    = cm.getValue();
+        const matches = [];
+        let m, guard = 0;
+        re.lastIndex = 0;
+        while ( ( m = re.exec( text ) ) ) {
+            matches.push( {
+                start: m.index,
+                end:   m.index + m[ 0 ].length,
+                groups: m,
+            } );
+            // A zero-length match (e.g. the regex `a*`) would never advance
+            // lastIndex on its own — nudge it so exec() can't spin forever.
+            if ( m[ 0 ].length === 0 ) re.lastIndex++;
+            if ( ++guard > 200000 ) break;
+        }
+        return matches;
+    }
+
+    // Per-line token overlay that paints every match. Operates on a single
+    // line at a time (stream.string), so a match spanning a newline is
+    // highlighted only by the current-match marker, not the overlay — an
+    // acceptable edge case for code-block-sized documents.
+    function makeSearchOverlay( s ) {
+        const re = buildSearchRegex( s );
+        if ( ! re ) return null;
+        return {
+            token: function ( stream ) {
+                re.lastIndex = stream.pos;
+                const match = re.exec( stream.string );
+                if ( match && match.index === stream.pos ) {
+                    stream.pos += match[ 0 ].length || 1;
+                    return 'chsh-search';
+                } else if ( match ) {
+                    stream.pos = match.index;
+                } else {
+                    stream.skipToEnd();
+                }
+            },
+        };
+    }
+
+    function expandReplacement( s, groups ) {
+        if ( ! s.useRegex ) return s.replaceValue;
+        // Support $&, $1-$99 and $$ in regex replacements, matching the
+        // familiar String.replace semantics.
+        return s.replaceValue.replace(
+            /\$(\$|&|\d{1,2})/g,
+            function ( _, g ) {
+                if ( g === '$' ) return '$';
+                if ( g === '&' ) return groups[ 0 ] || '';
+                const n = parseInt( g, 10 );
+                return groups[ n ] != null ? groups[ n ] : '';
+            }
+        );
+    }
+
+    function indexAtOrAfter( matches, fromIndex ) {
+        for ( let i = 0; i < matches.length; i++ ) {
+            if ( matches[ i ].start >= fromIndex ) return i;
+        }
+        return matches.length ? 0 : -1; // wrap to the top
+    }
+
+    function clearCurrentMark( s ) {
+        if ( s.currentMark ) {
+            try { s.currentMark.clear(); } catch ( e ) {}
+            s.currentMark = null;
+        }
+    }
+
+    function updateSearchCount( s ) {
+        if ( ! s.countEl ) return;
+        const n = s.matches.length;
+        if ( ! n ) {
+            s.countEl.textContent = s.query ? 'No results' : '';
+            return;
+        }
+        s.countEl.textContent =
+            ( s.currentIndex >= 0 ? s.currentIndex + 1 : 0 ) + '/' + n;
+    }
+
+    function markRegexValidity( s, ok ) {
+        if ( s.input ) {
+            s.input.classList.toggle( 'chsh-search-input--error', ! ok );
+        }
+    }
+
+    function setCurrentMatch( cm, idx, scroll ) {
+        const s = getSearchState( cm );
+        clearCurrentMark( s );
+        s.currentIndex = idx;
+        const m = s.matches[ idx ];
+        if ( ! m ) { updateSearchCount( s ); return; }
+        s.anchor  = m.start;
+        const from = cm.posFromIndex( m.start );
+        const to   = cm.posFromIndex( m.end );
+        cm.setSelection( from, to );
+        s.currentMark = cm.markText( from, to, {
+            className: 'cm-chsh-search-current',
+        } );
+        if ( scroll ) cm.scrollIntoView( { from: from, to: to }, 60 );
+        updateSearchCount( s );
+    }
+
+    // Recompute the overlay/matches for the current query.
+    //   move=true   pick the match at/after the anchor and select+scroll it
+    //               (used after typing, toggling options, or replacing)
+    //   move=false  just refresh highlighting and the counter, holding the
+    //               current position (used when the doc changes underneath)
+    function refreshSearch( cm, scroll, move ) {
+        const s = getSearchState( cm );
+        if ( s.overlay ) { cm.removeOverlay( s.overlay ); s.overlay = null; }
+        s.query = s.input ? s.input.value : s.query;
+        if ( s.replaceInput ) s.replaceValue = s.replaceInput.value;
+
+        if ( ! s.query ) {
+            clearCurrentMark( s );
+            s.matches = []; s.currentIndex = -1;
+            markRegexValidity( s, true );
+            updateSearchCount( s );
+            return;
+        }
+        const re = buildSearchRegex( s );
+        if ( ! re ) {
+            clearCurrentMark( s );
+            s.matches = []; s.currentIndex = -1;
+            markRegexValidity( s, false );
+            updateSearchCount( s );
+            return;
+        }
+        markRegexValidity( s, true );
+        s.matches = computeSearchMatches( cm, re );
+
+        const overlay = makeSearchOverlay( s );
+        if ( overlay ) { s.overlay = overlay; cm.addOverlay( overlay ); }
+
+        if ( ! s.matches.length ) {
+            clearCurrentMark( s );
+            s.currentIndex = -1;
+            updateSearchCount( s );
+            return;
+        }
+        if ( move ) {
+            setCurrentMatch( cm, indexAtOrAfter( s.matches, s.anchor ), scroll );
+        } else {
+            let idx = s.currentIndex;
+            if ( idx < 0 || idx >= s.matches.length ) {
+                idx = indexAtOrAfter( s.matches, s.anchor );
+            }
+            clearCurrentMark( s );
+            s.currentIndex = idx;
+            const m = s.matches[ idx ];
+            if ( m ) {
+                s.anchor = m.start;
+                s.currentMark = cm.markText(
+                    cm.posFromIndex( m.start ),
+                    cm.posFromIndex( m.end ),
+                    { className: 'cm-chsh-search-current' }
+                );
+            }
+            updateSearchCount( s );
+        }
+    }
+
+    function navigateSearch( cm, rev ) {
+        const s = getSearchState( cm );
+        if ( ! s.panel ) { openSearchPanel( cm, false ); return; }
+        if ( ! s.matches.length ) return;
+        let idx = s.currentIndex;
+        if ( idx < 0 ) {
+            idx = indexAtOrAfter( s.matches, s.anchor );
+        } else {
+            idx = rev ? idx - 1 : idx + 1;
+        }
+        if ( idx < 0 ) idx = s.matches.length - 1;
+        if ( idx >= s.matches.length ) idx = 0;
+        setCurrentMatch( cm, idx, true );
+    }
+
+    function replaceCurrent( cm ) {
+        const s = getSearchState( cm );
+        if ( s.currentIndex < 0 || ! s.matches[ s.currentIndex ] ) {
+            navigateSearch( cm, false );
+            return;
+        }
+        const m   = s.matches[ s.currentIndex ];
+        const rep = expandReplacement( s, m.groups );
+        s.replacing = true;
+        cm.replaceRange(
+            rep, cm.posFromIndex( m.start ), cm.posFromIndex( m.end )
+        );
+        s.replacing = false;
+        // Resume searching just past where the replacement landed.
+        s.anchor = m.start + rep.length;
+        refreshSearch( cm, true, true );
+    }
+
+    function replaceAllSearch( cm ) {
+        const s  = getSearchState( cm );
+        const re = buildSearchRegex( s );
+        if ( ! re ) return;
+        const matches = computeSearchMatches( cm, re );
+        if ( ! matches.length ) return;
+        s.replacing = true;
+        cm.operation( function () {
+            // Replace back-to-front so earlier match offsets stay valid as
+            // later ranges are rewritten.
+            for ( let i = matches.length - 1; i >= 0; i-- ) {
+                const m = matches[ i ];
+                cm.replaceRange(
+                    expandReplacement( s, m.groups ),
+                    cm.posFromIndex( m.start ),
+                    cm.posFromIndex( m.end )
+                );
+            }
+        } );
+        s.replacing = false;
+        s.anchor = 0;
+        refreshSearch( cm, false, true );
+    }
+
+    function makeSearchButton( doc, cls, title, html ) {
+        const b = doc.createElement( 'button' );
+        b.type = 'button';
+        b.className = 'chsh-search-button ' + cls;
+        b.title = title;
+        b.setAttribute( 'aria-label', title );
+        b.innerHTML = html;
+        return b;
+    }
+
+    function syncOptButton( btn, on ) {
+        btn.classList.toggle( 'is-pressed', on );
+        btn.setAttribute( 'aria-pressed', on ? 'true' : 'false' );
+    }
+
+    function buildSearchPanel( cm, s, showReplace ) {
+        const wrapper = cm.getWrapperElement();
+        const doc     = wrapper.ownerDocument;
+
+        const panel = doc.createElement( 'div' );
+        panel.className = SEARCH_PANEL_CLASS;
+        // Don't let clicks/drags in the panel reach CodeMirror (which would
+        // move the cursor or start a selection behind the panel).
+        panel.addEventListener( 'mousedown', function ( e ) {
+            e.stopPropagation();
+        } );
+
+        const toggle = makeSearchButton(
+            doc, 'chsh-search-toggle', 'Toggle Replace', SEARCH_CHEVRON
+        );
+
+        const rows = doc.createElement( 'div' );
+        rows.className = 'chsh-search-rows';
+
+        // --- Find row ---
+        const findRow = doc.createElement( 'div' );
+        findRow.className = 'chsh-search-row';
+
+        const input = doc.createElement( 'input' );
+        input.type = 'text';
+        input.className = 'chsh-search-input';
+        input.placeholder = 'Find';
+        input.setAttribute( 'aria-label', 'Find' );
+
+        const count = doc.createElement( 'span' );
+        count.className = 'chsh-search-count';
+
+        const caseBtn = makeSearchButton(
+            doc, 'chsh-search-opt', 'Match Case', 'Aa'
+        );
+        const reBtn = makeSearchButton(
+            doc, 'chsh-search-opt', 'Use Regular Expression', '.*'
+        );
+        const prevBtn = makeSearchButton(
+            doc, 'chsh-search-nav', 'Previous Match (Shift+Enter)', SEARCH_UP
+        );
+        const nextBtn = makeSearchButton(
+            doc, 'chsh-search-nav', 'Next Match (Enter)', SEARCH_DOWN
+        );
+        const closeBtn = makeSearchButton(
+            doc, 'chsh-search-nav chsh-search-close', 'Close (Esc)', SEARCH_X
+        );
+
+        findRow.appendChild( input );
+        findRow.appendChild( count );
+        findRow.appendChild( caseBtn );
+        findRow.appendChild( reBtn );
+        findRow.appendChild( prevBtn );
+        findRow.appendChild( nextBtn );
+        findRow.appendChild( closeBtn );
+
+        // --- Replace row ---
+        const repRow = doc.createElement( 'div' );
+        repRow.className = 'chsh-search-row chsh-search-row--replace';
+
+        const repInput = doc.createElement( 'input' );
+        repInput.type = 'text';
+        repInput.className = 'chsh-search-replace-input';
+        repInput.placeholder = 'Replace';
+        repInput.setAttribute( 'aria-label', 'Replace' );
+
+        const repBtn    = makeSearchButton(
+            doc, 'chsh-search-act', 'Replace', 'Replace'
+        );
+        const repAllBtn = makeSearchButton(
+            doc, 'chsh-search-act', 'Replace All', 'All'
+        );
+
+        repRow.appendChild( repInput );
+        repRow.appendChild( repBtn );
+        repRow.appendChild( repAllBtn );
+
+        rows.appendChild( findRow );
+        rows.appendChild( repRow );
+        panel.appendChild( toggle );
+        panel.appendChild( rows );
+        wrapper.appendChild( panel );
+
+        s.panel = panel;
+        s.input = input;
+        s.replaceInput = repInput;
+        s.countEl = count;
+        if ( showReplace ) panel.classList.add( 'chsh-with-replace' );
+
+        syncOptButton( caseBtn, s.caseSensitive );
+        syncOptButton( reBtn, s.useRegex );
+
+        toggle.addEventListener( 'click', function () {
+            const on = ! panel.classList.contains( 'chsh-with-replace' );
+            panel.classList.toggle( 'chsh-with-replace', on );
+            if ( on ) repInput.focus();
+            else input.focus();
+        } );
+
+        input.addEventListener( 'input', function () {
+            refreshSearch( cm, true, true );
+        } );
+        input.addEventListener( 'keydown', function ( e ) {
+            if ( e.key === 'Enter' ) {
+                e.preventDefault();
+                navigateSearch( cm, e.shiftKey );
+            } else if ( e.key === 'Escape' ) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeSearchPanel( cm );
+            }
+        } );
+
+        repInput.addEventListener( 'input', function () {
+            s.replaceValue = repInput.value;
+        } );
+        repInput.addEventListener( 'keydown', function ( e ) {
+            if ( e.key === 'Enter' ) {
+                e.preventDefault();
+                replaceCurrent( cm );
+            } else if ( e.key === 'Escape' ) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeSearchPanel( cm );
+            }
+        } );
+
+        caseBtn.addEventListener( 'click', function () {
+            s.caseSensitive = ! s.caseSensitive;
+            syncOptButton( caseBtn, s.caseSensitive );
+            refreshSearch( cm, true, true );
+            input.focus();
+        } );
+        reBtn.addEventListener( 'click', function () {
+            s.useRegex = ! s.useRegex;
+            syncOptButton( reBtn, s.useRegex );
+            refreshSearch( cm, true, true );
+            input.focus();
+        } );
+        prevBtn.addEventListener( 'click', function () {
+            navigateSearch( cm, true );
+            input.focus();
+        } );
+        nextBtn.addEventListener( 'click', function () {
+            navigateSearch( cm, false );
+            input.focus();
+        } );
+        closeBtn.addEventListener( 'click', function () {
+            closeSearchPanel( cm );
+        } );
+        repBtn.addEventListener( 'click', function () {
+            replaceCurrent( cm );
+        } );
+        repAllBtn.addEventListener( 'click', function () {
+            replaceAllSearch( cm );
+        } );
+
+        // Keep matches in sync if the document is edited while the panel is
+        // open. Our own replace() edits set `replacing` so this is a no-op
+        // during them (refreshSearch is called explicitly afterward).
+        s.changeHandler = function () {
+            if ( s.panel && ! s.replacing ) refreshSearch( cm, false, false );
+        };
+        cm.on( 'change', s.changeHandler );
+    }
+
+    function openSearchPanel( cm, showReplace ) {
+        const s = getSearchState( cm );
+        if ( s.panel ) {
+            if ( showReplace ) s.panel.classList.add( 'chsh-with-replace' );
+            s.input.focus();
+            s.input.select();
+            return;
+        }
+        buildSearchPanel( cm, s, showReplace );
+
+        // Seed from a single-line selection, like a typical editor's find.
+        if ( cm.somethingSelected() ) {
+            const sel = cm.getSelection();
+            if ( sel && sel.indexOf( '\n' ) === -1 ) {
+                s.input.value = sel;
+            }
+        }
+        s.anchor = cm.indexFromPos( cm.getCursor( 'from' ) );
+        refreshSearch( cm, true, true );
+        s.input.focus();
+        s.input.select();
+    }
+
+    function closeSearchPanel( cm ) {
+        const s = getSearchState( cm );
+        if ( s.overlay ) { cm.removeOverlay( s.overlay ); s.overlay = null; }
+        clearCurrentMark( s );
+        if ( s.changeHandler ) {
+            cm.off( 'change', s.changeHandler );
+            s.changeHandler = null;
+        }
+        if ( s.panel && s.panel.parentNode ) {
+            s.panel.parentNode.removeChild( s.panel );
+        }
+        s.panel = s.input = s.replaceInput = s.countEl = null;
+        s.matches = []; s.currentIndex = -1;
+        cm.focus();
+    }
 
     function modeFor( textarea ) {
         const label = ( textarea.getAttribute( 'aria-label' ) || '' )
@@ -870,6 +1439,12 @@
                 const leading  = ( lineText.match( /^[ \t]*/ ) || [ '' ] )[ 0 ];
                 editor.replaceSelection( '\n' + leading );
             },
+            // Double-Esc to cancel the WP 7.0 modal (see handleEditorEsc).
+            // Returns CodeMirror.Pass outside a modal so the pre-7.0
+            // inline editor and the pop-out keep their default Esc.
+            Esc: function ( editor ) {
+                return handleEditorEsc( editor );
+            },
             // Toggle the fold containing the cursor — the conventional
             // CodeMirror foldcode keybinding.
             'Ctrl-Q': function ( editor ) {
@@ -877,6 +1452,32 @@
             },
             'Cmd-Q': function ( editor ) {
                 editor.foldCode( editor.getCursor() );
+            },
+            // Persistent find / replace panel (see openSearchPanel). These
+            // override the bundled search addon's transient-dialog
+            // bindings so Ctrl-F stays open with prev/next + replace.
+            'Ctrl-F': function ( editor ) { openSearchPanel( editor, false ); },
+            'Cmd-F': function ( editor ) { openSearchPanel( editor, false ); },
+            'Ctrl-H': function ( editor ) { openSearchPanel( editor, true ); },
+            'Shift-Ctrl-F': function ( editor ) {
+                openSearchPanel( editor, true );
+            },
+            'Cmd-Alt-F': function ( editor ) {
+                openSearchPanel( editor, true );
+            },
+            'Shift-Ctrl-R': function ( editor ) {
+                openSearchPanel( editor, true );
+            },
+            'Shift-Cmd-Alt-F': function ( editor ) {
+                openSearchPanel( editor, true );
+            },
+            'Ctrl-G': function ( editor ) { navigateSearch( editor, false ); },
+            'Cmd-G': function ( editor ) { navigateSearch( editor, false ); },
+            'Shift-Ctrl-G': function ( editor ) {
+                navigateSearch( editor, true );
+            },
+            'Shift-Cmd-G': function ( editor ) {
+                navigateSearch( editor, true );
             },
         } );
 
